@@ -1,4 +1,6 @@
 node_modules/
+.env
+.env.*
 labormeasurer.db
 labormeasurer.db-wal
 labormeasurer.db-shm

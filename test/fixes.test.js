@@ -8,10 +8,10 @@ const request = require('supertest');
 const { createTestApp, createEmployee, login, HOUR_MS } = require('./helpers');
 
 async function setup() {
-  const ctx = createTestApp();
-  createEmployee(ctx.db, { name: 'Admin', username: 'admin', isAdmin: true });
-  ctx.aId = createEmployee(ctx.db, { name: 'A', username: 'a', rateCents: 2000 });
-  ctx.bId = createEmployee(ctx.db, { name: 'B', username: 'b', rateCents: 2500 });
+  const ctx = await createTestApp();
+  await createEmployee(ctx.db, { name: 'Admin', username: 'admin', isAdmin: true });
+  ctx.aId = await createEmployee(ctx.db, { name: 'A', username: 'a', rateCents: 2000 });
+  ctx.bId = await createEmployee(ctx.db, { name: 'B', username: 'b', rateCents: 2500 });
   ctx.admin = await login(request, ctx.app, 'admin');
   ctx.workerA = await login(request, ctx.app, 'a');
   ctx.workerB = await login(request, ctx.app, 'b');
@@ -131,7 +131,7 @@ test('input bounds: oversized budget, oversized rate, short password all rejecte
 
 test('zero-rate worker: clocked in, burn 0, countdown paused-null, budget untouched', async () => {
   const ctx = await setup();
-  const vId = createEmployee(ctx.db, { name: 'Volunteer', username: 'v', rateCents: 0 });
+  const vId = await createEmployee(ctx.db, { name: 'Volunteer', username: 'v', rateCents: 0 });
   await request(ctx.app)
     .put(`/api/tasks/${ctx.taskId}/assignments`)
     .set('Cookie', ctx.admin)
@@ -159,6 +159,6 @@ test('login rate limit: 11th rapid attempt gets 429', async () => {
 
 test('corrupted stored hash yields 401, not a 500', async () => {
   const ctx = await setup();
-  ctx.db.prepare("UPDATE employees SET password_hash = 'garbage:aa' WHERE username = 'a'").run();
+  await ctx.db.run("UPDATE employees SET password_hash = 'garbage:aa' WHERE username = 'a'");
   await request(ctx.app).post('/api/login').send({ username: 'a', password: 'pw' }).expect(401);
 });

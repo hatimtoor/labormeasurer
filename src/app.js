@@ -6,11 +6,11 @@ const { createAuth } = require('./auth');
 const { createStore } = require('./store');
 const { createSseHub } = require('./sse');
 
-// Factory — the same seam serves production (SystemClock + file db) and tests
-// (FakeClock + ':memory:' db).
-function createApp({ db, clock }) {
+// Async factory — the same seam serves production (SystemClock + SQLite or
+// Supabase Postgres adapter) and tests (FakeClock + ':memory:' SQLite).
+async function createApp({ db, clock }) {
   const app = express();
-  const auth = createAuth(db);
+  const auth = await createAuth(db);
   const store = createStore(db, clock);
   const sse = createSseHub(store);
   const broadcast = sse.broadcast;

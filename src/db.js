@@ -2,7 +2,18 @@
 
 const Database = require('better-sqlite3');
 
-const SCHEMA = `
+// Unified async DB adapter. Two implementations share one interface:
+//   get(sql, params)  -> row | undefined      (also used for INSERT ... RETURNING)
+//   all(sql, params)  -> rows
+//   run(sql, params)  -> void
+//   transaction(fn)   -> awaits fn(txAdapter) atomically
+//   close()
+// SQL is written with `?` placeholders; the Postgres adapter converts them.
+// Note on sqlite + async transactions: better-sqlite3 is synchronous, so every
+// adapter promise resolves in a microtask — an async transaction body runs to
+// completion inside one macrotask and no other request can interleave.
+
+const SQLITE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS employees (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   name          TEXT NOT NULL,
@@ -35,7 +46,6 @@ CREATE TABLE IF NOT EXISTS sessions (
   clock_out_ms INTEGER CHECK (clock_out_ms IS NULL OR clock_out_ms >= clock_in_ms)
 );
 
--- invariant: an employee can have at most one open session across all tasks
 CREATE UNIQUE INDEX IF NOT EXISTS ux_open_session
   ON sessions(employee_id) WHERE clock_out_ms IS NULL;
 
@@ -47,12 +57,44 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 `;
 
-function openDb(file = 'labormeasurer.db') {
+function isUniqueViolation(err) {
+  return err && (err.code === '23505' || /UNIQUE/i.test(String(err.message)));
+}
+
+function createSqliteAdapter(file = 'labormeasurer.db') {
   const db = new Database(file);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
-  db.exec(SCHEMA);
-  return db;
+  db.exec(SQLITE_SCHEMA);
+
+  const adapter = {
+    kind: 'sqlite',
+    async get(sql, params = []) {
+      const stmt = db.prepare(sql);
+      return stmt.reader ? stmt.get(...params) : void stmt.run(...params);
+    },
+    async all(sql, params = []) {
+      return db.prepare(sql).all(...params);
+    },
+    async run(sql, params = []) {
+      db.prepare(sql).run(...params);
+    },
+    async transaction(fn) {
+      db.exec('BEGIN');
+      try {
+        const result = await fn(adapter);
+        db.exec('COMMIT');
+        return result;
+      } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+      }
+    },
+    async close() {
+      db.close();
+    },
+  };
+  return adapter;
 }
 
-module.exports = { openDb };
+module.exports = { createSqliteAdapter, isUniqueViolation };

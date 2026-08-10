@@ -59,12 +59,17 @@ function createSseHub(store) {
     }
   }
 
+  // fire-and-forget from mutation routes; errors must never crash a request
   function broadcast() {
     nextEventId += 1;
-    const snaps = store.allSnapshots();
-    for (const client of [...clients]) {
-      writeEvent(client, 'snapshot', payloadFor(client, snaps));
-    }
+    store
+      .allSnapshots()
+      .then((snaps) => {
+        for (const client of [...clients]) {
+          writeEvent(client, 'snapshot', payloadFor(client, snaps));
+        }
+      })
+      .catch((err) => console.error('broadcast failed:', err.message));
   }
 
   const MAX_CONNECTIONS_PER_USER = 5;
@@ -88,7 +93,10 @@ function createSseHub(store) {
     const client = { res, employeeId: req.user.id, isAdmin: !!req.user.is_admin };
     clients.add(client);
     nextEventId += 1;
-    writeEvent(client, 'init', payloadFor(client, store.allSnapshots()));
+    store
+      .allSnapshots()
+      .then((snaps) => writeEvent(client, 'init', payloadFor(client, snaps)))
+      .catch((err) => console.error('sse init failed:', err.message));
 
     req.on('close', () => clients.delete(client));
   }

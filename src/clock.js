@@ -6,14 +6,9 @@
 // other infrastructure timing use real time and are exempt.
 
 // offset is persisted in the settings table so a restart never moves time backwards.
-function createSystemClock(db) {
-  const getRow = db.prepare("SELECT value FROM settings WHERE key = 'timewarp_offset_ms'");
-  const setRow = db.prepare(
-    "INSERT INTO settings (key, value) VALUES ('timewarp_offset_ms', ?) " +
-    'ON CONFLICT(key) DO UPDATE SET value = excluded.value'
-  );
-
-  let offsetMs = Number(getRow.get()?.value ?? 0);
+async function createSystemClock(db) {
+  const row = await db.get("SELECT value FROM settings WHERE key = 'timewarp_offset_ms'");
+  let offsetMs = Number(row?.value ?? 0);
 
   return {
     now() {
@@ -23,10 +18,14 @@ function createSystemClock(db) {
       return offsetMs;
     },
     // advance-only: monotonic time is what makes open sessions safe across warps
-    advance(ms) {
+    async advance(ms) {
       if (!Number.isInteger(ms) || ms < 0) throw new Error('advance_ms must be a non-negative integer');
       offsetMs += ms;
-      setRow.run(String(offsetMs));
+      await db.run(
+        `INSERT INTO settings (key, value) VALUES ('timewarp_offset_ms', ?)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+        [String(offsetMs)]
+      );
       return offsetMs;
     },
   };
@@ -42,7 +41,7 @@ function createFakeClock(startMs = 0) {
     offsetMs() {
       return 0;
     },
-    advance(ms) {
+    async advance(ms) {
       if (!Number.isInteger(ms) || ms < 0) throw new Error('advance_ms must be a non-negative integer');
       nowMs += ms;
       return nowMs;

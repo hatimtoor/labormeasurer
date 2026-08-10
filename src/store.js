@@ -2,46 +2,55 @@
 
 const { computeTaskSnapshot } = require('./calc');
 
-// Thin data-access layer: prepared statements + snapshot assembly.
+const EMPLOYEE_COLUMNS = 'id, name, username, hourly_rate_cents, is_admin';
+
+// Async data-access layer over the db adapter (SQLite or Postgres).
 function createStore(db, clock) {
   const q = {
-    task: db.prepare('SELECT * FROM tasks WHERE id = ?'),
-    tasks: db.prepare('SELECT * FROM tasks ORDER BY id'),
-    taskSessions: db.prepare('SELECT * FROM sessions WHERE task_id = ? ORDER BY clock_in_ms'),
-    assignees: db.prepare(
-      `SELECT e.id, e.name, e.hourly_rate_cents FROM assignments a
-       JOIN employees e ON e.id = a.employee_id WHERE a.task_id = ? ORDER BY e.name`
-    ),
-    assignedTaskIds: db.prepare('SELECT task_id FROM assignments WHERE employee_id = ?'),
-    isAssigned: db.prepare('SELECT 1 FROM assignments WHERE task_id = ? AND employee_id = ?'),
-    employees: db.prepare('SELECT id, name, username, hourly_rate_cents, is_admin FROM employees ORDER BY name'),
-    employee: db.prepare('SELECT id, name, username, hourly_rate_cents, is_admin FROM employees WHERE id = ?'),
-    openSessionForEmployee: db.prepare('SELECT * FROM sessions WHERE employee_id = ? AND clock_out_ms IS NULL'),
-    insertSession: db.prepare(
-      'INSERT INTO sessions (task_id, employee_id, rate_cents_snapshot, clock_in_ms) VALUES (?, ?, ?, ?)'
-    ),
-    closeSession: db.prepare('UPDATE sessions SET clock_out_ms = ? WHERE id = ?'),
+    task: (id) => db.get('SELECT * FROM tasks WHERE id = ?', [id]),
+    tasks: () => db.all('SELECT * FROM tasks ORDER BY id'),
+    taskSessions: (taskId) => db.all('SELECT * FROM sessions WHERE task_id = ? ORDER BY clock_in_ms', [taskId]),
+    assignees: (taskId) =>
+      db.all(
+        `SELECT e.id, e.name, e.hourly_rate_cents FROM assignments a
+         JOIN employees e ON e.id = a.employee_id WHERE a.task_id = ? ORDER BY e.name`,
+        [taskId]
+      ),
+    isAssigned: (taskId, employeeId) =>
+      db.get('SELECT 1 AS x FROM assignments WHERE task_id = ? AND employee_id = ?', [taskId, employeeId]),
+    employees: () => db.all(`SELECT ${EMPLOYEE_COLUMNS} FROM employees ORDER BY name`),
+    employee: (id) => db.get(`SELECT ${EMPLOYEE_COLUMNS} FROM employees WHERE id = ?`, [id]),
+    openSessionForEmployee: (employeeId) =>
+      db.get('SELECT * FROM sessions WHERE employee_id = ? AND clock_out_ms IS NULL', [employeeId]),
+    insertSession: (taskId, employeeId, rateCents, nowMs) =>
+      db.get(
+        'INSERT INTO sessions (task_id, employee_id, rate_cents_snapshot, clock_in_ms) VALUES (?, ?, ?, ?) RETURNING id',
+        [taskId, employeeId, rateCents, nowMs]
+      ),
+    closeSession: (outMs, sessionId) =>
+      db.run('UPDATE sessions SET clock_out_ms = ? WHERE id = ?', [outMs, sessionId]),
   };
 
-  function snapshot(taskId) {
-    const task = q.task.get(taskId);
+  async function snapshot(taskId, taskRow = null) {
+    const task = taskRow || (await q.task(taskId));
     if (!task) return null;
-    const snap = computeTaskSnapshot(task, q.taskSessions.all(taskId), clock.now());
-    const names = new Map(q.assignees.all(taskId).map((e) => [e.id, e]));
-    // enrich employee lines with names for display (unknown = unassigned-but-worked)
+    const [sessions, assignees] = await Promise.all([q.taskSessions(task.id), q.assignees(task.id)]);
+    const snap = computeTaskSnapshot(task, sessions, clock.now());
+    const names = new Map(assignees.map((e) => [e.id, e]));
     for (const line of snap.employees) {
-      const emp = names.get(line.employee_id) || q.employee.get(line.employee_id);
+      const emp = names.get(line.employee_id) || (await q.employee(line.employee_id));
       line.name = emp ? emp.name : `#${line.employee_id}`;
     }
     snap.name = task.name;
     snap.status = task.status;
     snap.show_countdown_to_employees = !!task.show_countdown_to_employees;
-    snap.assignees = [...names.values()];
+    snap.assignees = assignees;
     return snap;
   }
 
-  function allSnapshots() {
-    return q.tasks.all().map((t) => snapshot(t.id));
+  async function allSnapshots() {
+    const tasks = await q.tasks();
+    return Promise.all(tasks.map((t) => snapshot(t.id, t)));
   }
 
   return { q, snapshot, allSnapshots };

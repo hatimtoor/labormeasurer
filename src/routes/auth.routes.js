@@ -24,25 +24,30 @@ function createLoginLimiter() {
 
 module.exports = function authRoutes({ db, auth }) {
   const router = express.Router();
-  const byUsername = db.prepare('SELECT * FROM employees WHERE username = ?');
   const allowAttempt = createLoginLimiter();
 
-  router.post('/login', (req, res) => {
-    const { username, password } = req.body || {};
-    const key = `${String(username ?? '').toLowerCase()}|${req.ip}`;
-    if (!allowAttempt(key, Date.now())) {
-      return res.status(429).json({ error: 'too many login attempts — try again in 15 minutes' });
+  router.post('/login', async (req, res, next) => {
+    try {
+      const { username, password } = req.body || {};
+      const key = `${String(username ?? '').toLowerCase()}|${req.ip}`;
+      if (!allowAttempt(key, Date.now())) {
+        return res.status(429).json({ error: 'too many login attempts — try again in 15 minutes' });
+      }
+      const user = username
+        ? await db.get('SELECT * FROM employees WHERE username = ?', [String(username).toLowerCase()])
+        : null;
+      if (!user) {
+        burnScrypt(password);
+        return res.status(401).json({ error: 'invalid username or password' });
+      }
+      if (!verifyPassword(String(password ?? ''), user.password_hash)) {
+        return res.status(401).json({ error: 'invalid username or password' });
+      }
+      auth.setLoginCookie(res, user.id);
+      res.json({ id: user.id, name: user.name, is_admin: !!user.is_admin });
+    } catch (err) {
+      next(err);
     }
-    const user = username ? byUsername.get(String(username).toLowerCase()) : null;
-    if (!user) {
-      burnScrypt(password);
-      return res.status(401).json({ error: 'invalid username or password' });
-    }
-    if (!verifyPassword(String(password ?? ''), user.password_hash)) {
-      return res.status(401).json({ error: 'invalid username or password' });
-    }
-    auth.setLoginCookie(res, user.id);
-    res.json({ id: user.id, name: user.name, is_admin: !!user.is_admin });
   });
 
   router.post('/logout', (req, res) => {
