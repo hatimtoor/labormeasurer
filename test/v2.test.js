@@ -234,3 +234,42 @@ test('history endpoint returns a monotonic consumption curve', async () => {
     assert.ok(hist.points[i].consumed_cents >= hist.points[i - 1].consumed_cents);
   }
 });
+
+test('rapid worker toggles commute: delta assign endpoints never drop a selection', async () => {
+  const ctx = await setup();
+  const bId = await createEmployee(ctx.data, { name: 'B', username: 'b', rateCents: 2500 });
+  const cId = await createEmployee(ctx.data, { name: 'C', username: 'c', rateCents: 3000 });
+  // start with nobody assigned
+  await request(ctx.app)
+    .put(`/api/tasks/${ctx.taskId}/assignments`)
+    .set('Cookie', ctx.admin)
+    .send({ employee_ids: [] })
+    .expect(200);
+
+  // the failure mode: two toggles fired back-to-back, each unaware of the
+  // other (previously full-replace built from a stale snapshot dropped one)
+  await Promise.all([
+    request(ctx.app).post(`/api/tasks/${ctx.taskId}/assignments/${bId}`).set('Cookie', ctx.admin),
+    request(ctx.app).post(`/api/tasks/${ctx.taskId}/assignments/${cId}`).set('Cookie', ctx.admin),
+  ]);
+  let snap = (await request(ctx.app).get('/api/tasks').set('Cookie', ctx.admin).expect(200)).body.tasks[0];
+  assert.deepEqual(snap.assignees.map((a) => a.id).sort(), [bId, cId].sort()); // BOTH kept
+
+  // duplicate add is a no-op, not an error
+  await request(ctx.app).post(`/api/tasks/${ctx.taskId}/assignments/${bId}`).set('Cookie', ctx.admin).expect(200);
+
+  // removing a clocked-in worker closes their session
+  const workerB = await login(request, ctx.app, 'b');
+  await request(ctx.app).post(`/api/tasks/${ctx.taskId}/clock-in`).set('Cookie', workerB).expect(201);
+  ctx.clock.advance(HOUR_MS);
+  await request(ctx.app).delete(`/api/tasks/${ctx.taskId}/assignments/${bId}`).set('Cookie', ctx.admin).expect(200);
+  snap = (await request(ctx.app).get('/api/tasks').set('Cookie', ctx.admin).expect(200)).body.tasks[0];
+  assert.equal(snap.burn_rate_cents_per_hour, 0); // session closed on unassign
+  assert.equal(snap.consumed_cents, 2500); // 1h at $25 kept
+  assert.deepEqual(snap.assignees.map((a) => a.id), [cId]);
+
+  // unknown ids rejected
+  await request(ctx.app).post(`/api/tasks/${ctx.taskId}/assignments/99999`).set('Cookie', ctx.admin).expect(404);
+  // workers cannot touch assignments
+  await request(ctx.app).post(`/api/tasks/${ctx.taskId}/assignments/${cId}`).set('Cookie', ctx.workerA).expect(403);
+});

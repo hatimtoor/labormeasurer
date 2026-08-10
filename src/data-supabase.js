@@ -92,6 +92,33 @@ function createSupabaseData(projectUrl, serviceRoleKey) {
     },
 
     // --- assignments ---
+    // delta operations — see data-sql.js note on why these exist
+    addAssignment: async (taskId, employeeId) => {
+      unwrap(
+        await sb
+          .from('assignments')
+          .upsert({ task_id: taskId, employee_id: employeeId }, { onConflict: 'task_id,employee_id', ignoreDuplicates: true })
+      );
+    },
+    async removeAssignment(taskId, employeeId, nowMs) {
+      // close their open session on this task first (clamped), then unassign
+      const open = unwrap(
+        await sb
+          .from('sessions')
+          .select('id, clock_in_ms')
+          .eq('task_id', taskId)
+          .eq('employee_id', employeeId)
+          .is('clock_out_ms', null)
+          .eq('voided', 0)
+          .maybeSingle()
+      );
+      if (open) {
+        unwrap(
+          await sb.from('sessions').update({ clock_out_ms: Math.max(nowMs, open.clock_in_ms) }).eq('id', open.id)
+        );
+      }
+      unwrap(await sb.from('assignments').delete().eq('task_id', taskId).eq('employee_id', employeeId));
+    },
     isAssigned: async (taskId, employeeId) =>
       !!unwrap(
         await sb.from('assignments').select('task_id').eq('task_id', taskId).eq('employee_id', employeeId).maybeSingle()

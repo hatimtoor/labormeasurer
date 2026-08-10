@@ -164,6 +164,42 @@ module.exports = function taskRoutes({ data, store, auth, clock, org, audit, bro
     }
   });
 
+  // single-worker assign/unassign — the UI uses these so rapid checkbox
+  // toggles commute instead of full-replace races overwriting each other
+  router.post('/:id/assignments/:employeeId', auth.requireAdmin, async (req, res, next) => {
+    try {
+      const taskId = intParam(req.params.id);
+      const employeeId = intParam(req.params.employeeId);
+      if (taskId == null || employeeId == null) return res.status(400).json({ error: 'invalid id' });
+      const [task, employee] = await Promise.all([data.getTask(taskId), data.getEmployee(employeeId)]);
+      if (!task) return res.status(404).json({ error: 'no such task' });
+      if (!employee) return res.status(404).json({ error: 'no such employee' });
+      await data.addAssignment(taskId, employeeId);
+      audit(req, 'task.assign', 'task', taskId, { employee_id: employeeId, name: employee.name });
+      broadcast();
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.delete('/:id/assignments/:employeeId', auth.requireAdmin, async (req, res, next) => {
+    try {
+      const taskId = intParam(req.params.id);
+      const employeeId = intParam(req.params.employeeId);
+      if (taskId == null || employeeId == null) return res.status(400).json({ error: 'invalid id' });
+      const [task, employee] = await Promise.all([data.getTask(taskId), data.getEmployee(employeeId)]);
+      if (!task) return res.status(404).json({ error: 'no such task' });
+      if (!employee) return res.status(404).json({ error: 'no such employee' });
+      await data.removeAssignment(taskId, employeeId, clock.now());
+      audit(req, 'task.unassign', 'task', taskId, { employee_id: employeeId, name: employee.name });
+      broadcast();
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // ---- corrections (admin): session listing, void, adjust -----------------
   router.get('/:id/sessions', auth.requireAdmin, async (req, res, next) => {
     try {

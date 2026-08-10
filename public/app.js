@@ -271,7 +271,13 @@ function updateCard(card, taskId) {
   const selected = taskId === selectedTaskId;
   const sig = `${s.at_ms}|${selected ? 1 : 0}|${s.redacted ? 1 : 0}|${s.exhausted_live ? 1 : 0}|${rosterRev}`;
 
-  const typing = card.contains(document.activeElement) && ['INPUT', 'SELECT'].includes(document.activeElement.tagName);
+  // freeze rebuilds only for controls where losing state mid-interaction hurts
+  // (text entry, open selects) — NOT checkboxes, whose state is instantaneous
+  // and which must not block the card from refreshing after a toggle
+  const active = document.activeElement;
+  const typing =
+    card.contains(active) &&
+    ((active.tagName === 'INPUT' && active.type !== 'checkbox') || active.tagName === 'SELECT');
 
   if (card.dataset.sig === sig || typing) {
     tickLive(card, s);
@@ -491,18 +497,23 @@ function renderAdminControls(s) {
 function wireAdminControls(card, s) {
   card.querySelectorAll('[data-assign]').forEach((box) => {
     box.onchange = async () => {
-      // build from the LIVE snapshot (kept fresh by SSE), not the DOM —
-      // stale checkboxes must not silently unassign someone another admin added
-      const current = LM.liveState(s.task_id);
-      const ids = new Set((current?.assignees || []).map((a) => a.id));
+      // delta add/remove per worker — full-replace raced against itself when
+      // several checkboxes were toggled before the next snapshot arrived,
+      // silently dropping all but the last selection
       const toggled = Number(box.dataset.assign);
-      if (box.checked) ids.add(toggled);
-      else ids.delete(toggled);
+      const wasChecked = box.checked;
+      box.disabled = true;
       try {
-        await api(`/api/tasks/${s.task_id}/assignments`, { method: 'PUT', body: { employee_ids: [...ids] } });
+        await api(`/api/tasks/${s.task_id}/assignments/${toggled}`, {
+          method: wasChecked ? 'POST' : 'DELETE',
+        });
         syncTasks();
       } catch (err) {
+        box.checked = !wasChecked; // revert the visual state on failure
         toast(err.message, true);
+      } finally {
+        box.disabled = false;
+        box.blur(); // let the next snapshot rebuild the card (clock-in button appears)
       }
     };
   });

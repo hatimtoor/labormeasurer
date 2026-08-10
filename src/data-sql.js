@@ -69,6 +69,28 @@ function createSqlData(db) {
     deleteEmployee: (id) => db.run('DELETE FROM employees WHERE id = ?', [id]),
 
     // --- assignments ---
+    // delta operations: concurrent add/remove of DIFFERENT workers commute,
+    // unlike full-replace, so rapid checkbox toggles can't overwrite each other
+    addAssignment: (taskId, employeeId) =>
+      db.run('INSERT INTO assignments (task_id, employee_id) VALUES (?, ?) ON CONFLICT DO NOTHING', [
+        taskId,
+        employeeId,
+      ]),
+    async removeAssignment(taskId, employeeId, nowMs) {
+      await db.transaction(async (tx) => {
+        const open = await tx.get(
+          'SELECT id, clock_in_ms FROM sessions WHERE task_id = ? AND employee_id = ? AND clock_out_ms IS NULL AND voided = 0',
+          [taskId, employeeId]
+        );
+        if (open) {
+          await tx.run('UPDATE sessions SET clock_out_ms = ? WHERE id = ?', [
+            Math.max(nowMs, open.clock_in_ms),
+            open.id,
+          ]);
+        }
+        await tx.run('DELETE FROM assignments WHERE task_id = ? AND employee_id = ?', [taskId, employeeId]);
+      });
+    },
     isAssigned: async (taskId, employeeId) =>
       !!(await db.get('SELECT 1 AS x FROM assignments WHERE task_id = ? AND employee_id = ?', [taskId, employeeId])),
     // closes open sessions of removed workers, then swaps the assignment set
