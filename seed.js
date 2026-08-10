@@ -11,8 +11,16 @@ const { openDb } = require('./src/db');
 const { hashPassword } = require('./src/auth');
 
 const file = process.env.LM_DB || 'labormeasurer.db';
-for (const suffix of ['', '-wal', '-shm']) {
-  if (fs.existsSync(file + suffix)) fs.unlinkSync(file + suffix);
+try {
+  for (const suffix of ['', '-wal', '-shm']) {
+    if (fs.existsSync(file + suffix)) fs.unlinkSync(file + suffix);
+  }
+} catch (err) {
+  if (err.code === 'EBUSY' || err.code === 'EPERM') {
+    console.error(`Cannot reset ${file} — it is in use. Stop the server (npm start) first, then re-run npm run seed.`);
+    process.exit(1);
+  }
+  throw err;
 }
 
 const db = openDb(file);
@@ -32,7 +40,10 @@ const assign = db.prepare('INSERT INTO assignments (task_id, employee_id) VALUES
 assign.run(task, a);
 assign.run(task, b);
 
+db.close();
+
 console.log('Seeded demo data into', file);
+console.log('NOTE: demo credentials are for local demos only — change them before any network deployment.');
 console.log('  admin   / admin   (manager)');
 console.log('  workera / worker  ($20/hr)');
 console.log('  workerb / worker  ($25/hr)');

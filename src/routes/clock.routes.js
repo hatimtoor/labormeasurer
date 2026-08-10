@@ -13,6 +13,10 @@ module.exports = function clockRoutes({ db, store, auth, clock, broadcast }) {
         return null;
       }
       employeeId = Number(req.body.employee_id);
+      if (!Number.isInteger(employeeId)) {
+        res.status(400).json({ error: 'invalid employee_id' });
+        return null;
+      }
     }
     const employee = store.q.employee.get(employeeId);
     if (!employee) {
@@ -41,7 +45,16 @@ module.exports = function clockRoutes({ db, store, auth, clock, broadcast }) {
       return res.status(409).json({ error: 'already clocked into another task', open_task_id: open.task_id });
     }
 
-    const info = store.q.insertSession.run(task.id, employee.id, employee.hourly_rate_cents, clock.now());
+    let info;
+    try {
+      info = store.q.insertSession.run(task.id, employee.id, employee.hourly_rate_cents, clock.now());
+    } catch (err) {
+      // ux_open_session partial unique index — lost a race with a concurrent clock-in
+      if (String(err.message).includes('UNIQUE')) {
+        return res.status(409).json({ error: 'already clocked in' });
+      }
+      throw err;
+    }
     broadcast();
     res.status(201).json({ ok: true, session_id: info.lastInsertRowid });
   });
@@ -57,7 +70,8 @@ module.exports = function clockRoutes({ db, store, auth, clock, broadcast }) {
       // idempotent no-op
       return res.json({ ok: true, already: true });
     }
-    store.q.closeSession.run(clock.now(), open.id);
+    // clamp so an NTP step backwards can never violate clock_out >= clock_in
+    store.q.closeSession.run(Math.max(clock.now(), open.clock_in_ms), open.id);
     broadcast();
     res.json({ ok: true, session_id: open.id });
   });

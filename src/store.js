@@ -15,7 +15,7 @@ function createStore(db, clock) {
     assignedTaskIds: db.prepare('SELECT task_id FROM assignments WHERE employee_id = ?'),
     isAssigned: db.prepare('SELECT 1 FROM assignments WHERE task_id = ? AND employee_id = ?'),
     employees: db.prepare('SELECT id, name, username, hourly_rate_cents, is_admin FROM employees ORDER BY name'),
-    employee: db.prepare('SELECT * FROM employees WHERE id = ?'),
+    employee: db.prepare('SELECT id, name, username, hourly_rate_cents, is_admin FROM employees WHERE id = ?'),
     openSessionForEmployee: db.prepare('SELECT * FROM sessions WHERE employee_id = ? AND clock_out_ms IS NULL'),
     insertSession: db.prepare(
       'INSERT INTO sessions (task_id, employee_id, rate_cents_snapshot, clock_in_ms) VALUES (?, ?, ?, ?)'

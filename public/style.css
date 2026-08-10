@@ -30,14 +30,15 @@ input { font: inherit; }
 
 /* ---------- topbar ---------- */
 #topbar {
-  display: flex; justify-content: space-between; align-items: center;
+  display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.4rem;
   padding: 0.7rem 1.4rem;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
   position: sticky; top: 0; z-index: 10;
 }
 .brand .tagline { color: var(--muted); font-size: 0.85rem; margin-left: 0.5rem; }
-.topbar-right { display: flex; gap: 0.8rem; align-items: center; color: var(--muted); }
+.topbar-right { display: flex; gap: 0.8rem; align-items: center; color: var(--muted); flex-wrap: wrap; }
+.badge.conn-lost { border-color: var(--amber); color: var(--amber); animation: pulse 1.6s ease-in-out infinite; }
 
 /* ---------- login ---------- */
 #login-view { display: grid; place-items: center; min-height: 100vh; }
@@ -63,7 +64,7 @@ input { font: inherit; }
 .panel form { display: grid; gap: 0.6rem; }
 
 /* ---------- task cards ---------- */
-.task-cards { display: grid; gap: 1.2rem; align-content: start; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+.task-cards { display: grid; gap: 1.2rem; align-content: start; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); }
 .task-cards.employee { padding: 1.2rem 1.4rem; max-width: 900px; margin: 0 auto; }
 .task-card {
   background: var(--panel); border: 1px solid var(--border);
@@ -102,7 +103,7 @@ input { font: inherit; }
 .bar-fill.red { background: var(--red); }
 
 .stats {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem 0.8rem; font-size: 0.85rem;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 0.5rem 0.8rem; font-size: 0.85rem;
 }
 .stats > div { display: grid; }
 .stats .muted { font-size: 0.7rem; }
@@ -150,8 +151,11 @@ input:focus { outline: none; border-color: var(--accent); }
 .small { font-size: 0.8rem; }
 .error { color: var(--red); font-size: 0.85rem; }
 
-.toast {
+#toast-stack {
   position: fixed; bottom: 1.2rem; right: 1.2rem; z-index: 50;
+  display: flex; flex-direction: column-reverse; gap: 0.5rem; align-items: flex-end;
+}
+.toast {
   background: var(--panel-2); border: 1px solid var(--accent);
   border-radius: 8px; padding: 0.6rem 1rem; animation: fadein 0.2s;
 }

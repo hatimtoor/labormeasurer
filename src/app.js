@@ -15,7 +15,16 @@ function createApp({ db, clock }) {
   const sse = createSseHub(store);
   const broadcast = sse.broadcast;
 
-  app.use(express.json());
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'"
+    );
+    next();
+  });
+  app.use(express.json({ limit: '50kb' }));
   app.use(auth.attachUser);
   app.use(express.static(path.join(__dirname, '..', 'public')));
 

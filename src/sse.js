@@ -5,7 +5,27 @@
 // an employee's browser.
 
 function redactForEmployee(snap, employeeId) {
-  if (snap.show_countdown_to_employees) return snap;
+  if (snap.show_countdown_to_employees) {
+    // Employee may see the countdown and aggregates, but never a CO-WORKER's
+    // hourly rate or individual cost — that is compensation data. Their own
+    // line stays complete.
+    return {
+      ...snap,
+      employees: snap.employees.map((line) =>
+        line.employee_id === employeeId
+          ? line
+          : {
+              employee_id: line.employee_id,
+              name: line.name,
+              worked_ms: line.worked_ms,
+              clocked_in: line.clocked_in,
+            }
+      ),
+      assignees: snap.assignees.map((a) =>
+        a.id === employeeId ? a : { id: a.id, name: a.name }
+      ),
+    };
+  }
   return {
     task_id: snap.task_id,
     at_ms: snap.at_ms,
@@ -47,7 +67,16 @@ function createSseHub(store) {
     }
   }
 
+  const MAX_CONNECTIONS_PER_USER = 5;
+
   function handler(req, res) {
+    // cap per-user streams; drop the oldest so a reconnect storm can't leak fds
+    const mine = [...clients].filter((c) => c.employeeId === req.user.id);
+    if (mine.length >= MAX_CONNECTIONS_PER_USER) {
+      const oldest = mine[0];
+      try { oldest.res.end(); } catch { /* already gone */ }
+      clients.delete(oldest);
+    }
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',

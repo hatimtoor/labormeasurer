@@ -3,9 +3,12 @@
 const express = require('express');
 const { hashPassword } = require('../auth');
 
+const MAX_RATE_CENTS = 10_000_000; // $100,000/hr — generous sanity bound
+const MIN_PASSWORD_LENGTH = 8;
+
 function parseRateCents(value) {
   const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) return null;
+  if (!Number.isFinite(n) || n < 0 || n > MAX_RATE_CENTS) return null;
   return Math.round(n);
 }
 
@@ -21,6 +24,9 @@ module.exports = function employeeRoutes({ db, store, auth, broadcast }) {
     const rate = parseRateCents(hourly_rate_cents);
     if (!name || !username || !password || rate == null) {
       return res.status(400).json({ error: 'name, username, password, hourly_rate_cents required' });
+    }
+    if (String(password).length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({ error: `password must be at least ${MIN_PASSWORD_LENGTH} characters` });
     }
     try {
       const info = db
@@ -49,7 +55,12 @@ module.exports = function employeeRoutes({ db, store, auth, broadcast }) {
       // NOTE: open sessions keep their rate snapshot; new rate applies to future clock-ins
       updates.push('hourly_rate_cents = ?'); params.push(rate);
     }
-    if (password != null) { updates.push('password_hash = ?'); params.push(hashPassword(String(password))); }
+    if (password != null) {
+      if (String(password).length < MIN_PASSWORD_LENGTH) {
+        return res.status(400).json({ error: `password must be at least ${MIN_PASSWORD_LENGTH} characters` });
+      }
+      updates.push('password_hash = ?'); params.push(hashPassword(String(password)));
+    }
     if (!updates.length) return res.status(400).json({ error: 'nothing to update' });
     db.prepare(`UPDATE employees SET ${updates.join(', ')} WHERE id = ?`).run(...params, emp.id);
     broadcast();

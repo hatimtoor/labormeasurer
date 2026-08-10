@@ -22,10 +22,16 @@ async function api(path, opts = {}) {
 }
 
 function toast(message, isError = false) {
+  let stack = $('#toast-stack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.id = 'toast-stack';
+    document.body.appendChild(stack);
+  }
   const el = document.createElement('div');
   el.className = `toast${isError ? ' error' : ''}`;
   el.textContent = message;
-  document.body.appendChild(el);
+  stack.appendChild(el);
   setTimeout(() => el.remove(), 3500);
 }
 
@@ -75,11 +81,50 @@ function connectSse() {
   if (eventSource) eventSource.close();
   eventSource = new EventSource('/api/events');
   const onSnap = (e) => {
-    LM.ingest(JSON.parse(e.data));
+    let data;
+    try {
+      data = JSON.parse(e.data);
+    } catch {
+      return; // malformed frame — next broadcast will resync
+    }
+    setConnectionState(true);
+    LM.ingest(data);
     render();
+    if (me?.is_admin) refreshEmployees(); // keep roster in sync across admin tabs
   };
   eventSource.addEventListener('init', onSnap);
   eventSource.addEventListener('snapshot', onSnap);
+  eventSource.onerror = () => {
+    setConnectionState(false);
+    // A 401 (expired cookie, deleted user) closes the EventSource permanently —
+    // without this the countdown would keep ticking on stale data forever.
+    if (eventSource.readyState === EventSource.CLOSED) {
+      setTimeout(async () => {
+        try {
+          await api('/api/me');
+          connectSse();
+          refreshTasks();
+        } catch {
+          location.reload(); // session gone — back to login
+        }
+      }, 3000);
+    }
+  };
+}
+
+function setConnectionState(up) {
+  let badge = $('#conn-badge');
+  if (up) {
+    if (badge) badge.remove();
+    return;
+  }
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.id = 'conn-badge';
+    badge.className = 'badge conn-lost';
+    badge.textContent = 'reconnecting…';
+    $('#topbar .topbar-right').prepend(badge);
+  }
 }
 
 /* ---------- rendering ---------- */
@@ -107,8 +152,14 @@ function updateCard(card, taskId) {
   const s = LM.liveState(taskId);
   if (!s) return;
 
-  // don't clobber the card while the user is typing/clicking inside it
-  if (card.contains(document.activeElement) && document.activeElement !== document.body) {
+  // don't clobber the card only while the user is TYPING in a text field —
+  // focus on summaries/checkboxes/buttons must not freeze live updates
+  const active = document.activeElement;
+  const typing =
+    card.contains(active) &&
+    active.tagName === 'INPUT' &&
+    ['number', 'text', 'password'].includes(active.type);
+  if (typing) {
     tickCountdownOnly(card, s);
     return;
   }
@@ -125,7 +176,9 @@ function updateCard(card, taskId) {
   }
 
   const exhausted = s.exhausted_live;
-  const paused = s.burn_rate_cents_per_hour === 0;
+  const activeCount = (s.active_employee_ids || []).length;
+  const paused = activeCount === 0;
+  const freeCrew = !paused && s.burn_rate_cents_per_hour === 0; // $0/hr workers clocked in
   card.className = `task-card${exhausted ? ' exhausted' : ''}${paused ? ' paused' : ''}${s.status === 'archived' ? ' archived' : ''}`;
 
   const crew = s.employees.filter((e) => e.clocked_in);
@@ -137,7 +190,7 @@ function updateCard(card, taskId) {
     </div>
     ${exhausted ? '<div class="exhausted-banner">⚠ LABOR BUDGET EXHAUSTED</div>' : ''}
     <div class="countdown ${exhausted ? 'red' : paused ? 'gray' : 'green'}">
-      ${exhausted ? '0:00:00' : LM.fmtClock(s.remaining_seconds_live)}
+      ${exhausted ? '0:00:00' : freeCrew ? '∞' : LM.fmtClock(s.remaining_seconds_live)}
     </div>
     <div class="countdown-sub">
       ${
@@ -145,7 +198,9 @@ function updateCard(card, taskId) {
           ? `<span class="over">${LM.fmtMoney(-s.over_budget_cents_live)} over budget</span>`
           : paused
             ? 'paused — no one clocked in'
-            : `remaining at ${LM.fmtMoney(s.burn_rate_cents_per_hour)}/hr crew burn rate`
+            : freeCrew
+              ? 'crew clocked in at $0/hr — budget not burning'
+              : `remaining at ${LM.fmtMoney(s.burn_rate_cents_per_hour)}/hr crew burn rate`
       }
     </div>
     <div class="bar"><div class="bar-fill ${exhausted ? 'red' : ''}" style="width:${Math.min(100, s.pct_consumed_live).toFixed(1)}%"></div></div>
@@ -171,13 +226,19 @@ function updateCard(card, taskId) {
   }
 }
 
-// lightweight per-tick update used while the card is being interacted with
+// lightweight per-tick update used while the user is typing inside the card
 function tickCountdownOnly(card, s) {
   if (s.redacted) return;
   const clock = card.querySelector('.countdown');
   if (clock) clock.textContent = s.exhausted_live ? '0:00:00' : LM.fmtClock(s.remaining_seconds_live);
   const fill = card.querySelector('.bar-fill');
   if (fill) fill.style.width = `${Math.min(100, s.pct_consumed_live).toFixed(1)}%`;
+  // keep the exhausted state honest even in the light path
+  card.classList.toggle('exhausted', !!s.exhausted_live);
+  const sub = card.querySelector('.countdown-sub');
+  if (sub && s.exhausted_live) {
+    sub.innerHTML = `<span class="over">${LM.fmtMoney(-s.over_budget_cents_live)} over budget</span>`;
+  }
 }
 
 function renderEmployeeTable(s) {
@@ -186,9 +247,9 @@ function renderEmployeeTable(s) {
     .map(
       (e) => `<tr class="${e.clocked_in ? 'active-row' : ''}">
         <td>${e.clocked_in ? '🟢' : '⚪'} ${esc(e.name)}</td>
-        <td>${LM.fmtMoney(e.rate_cents_snapshot)}/hr</td>
+        <td>${e.rate_cents_snapshot != null ? `${LM.fmtMoney(e.rate_cents_snapshot)}/hr` : '—'}</td>
         <td>${LM.fmtHours(e.worked_ms)}</td>
-        <td>${LM.fmtMoney(e.cost_cents)}</td>
+        <td>${e.cost_cents != null ? LM.fmtMoney(e.cost_cents) : '—'}</td>
       </tr>`
     )
     .join('');
@@ -196,7 +257,7 @@ function renderEmployeeTable(s) {
   const idleRows = (s.assignees || [])
     .filter((a) => !workedIds.has(a.id))
     .map(
-      (a) => `<tr><td>⚪ ${esc(a.name)}</td><td>${LM.fmtMoney(a.hourly_rate_cents)}/hr</td><td>0.00 h</td><td>$0.00</td></tr>`
+      (a) => `<tr><td>⚪ ${esc(a.name)}</td><td>${a.hourly_rate_cents != null ? `${LM.fmtMoney(a.hourly_rate_cents)}/hr` : '—'}</td><td>0.00 h</td><td>$0.00</td></tr>`
     )
     .join('');
   return `<table class="emp-table">
@@ -255,9 +316,15 @@ function renderAdminControls(s) {
 function wireAdminControls(card, s) {
   card.querySelectorAll('[data-assign]').forEach((box) => {
     box.onchange = async () => {
-      const ids = [...card.querySelectorAll('[data-assign]')].filter((b) => b.checked).map((b) => Number(b.dataset.assign));
+      // build from the LIVE snapshot (kept fresh by SSE), not the DOM —
+      // stale checkboxes must not silently unassign someone another admin added
+      const current = LM.liveState(s.task_id);
+      const ids = new Set((current?.assignees || []).map((a) => a.id));
+      const toggled = Number(box.dataset.assign);
+      if (box.checked) ids.add(toggled);
+      else ids.delete(toggled);
       try {
-        await api(`/api/tasks/${s.task_id}/assignments`, { method: 'PUT', body: { employee_ids: ids } });
+        await api(`/api/tasks/${s.task_id}/assignments`, { method: 'PUT', body: { employee_ids: [...ids] } });
       } catch (err) {
         toast(err.message, true);
       }
@@ -353,7 +420,11 @@ $('#login-form').addEventListener('submit', async (e) => {
 });
 
 $('#logout-btn').addEventListener('click', async () => {
-  await api('/api/logout', { method: 'POST' });
+  try {
+    await api('/api/logout', { method: 'POST' });
+  } catch {
+    // even if the server is unreachable, drop local state and show login
+  }
   if (eventSource) eventSource.close();
   me = null;
   location.reload();

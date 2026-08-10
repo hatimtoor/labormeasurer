@@ -1,16 +1,44 @@
 'use strict';
 
 const express = require('express');
-const { verifyPassword } = require('../auth');
+const { verifyPassword, burnScrypt } = require('../auth');
+
+// Small fixed-window rate limiter for login: 10 attempts / 15 min per
+// username+IP. In-memory — resets on restart, which is fine at this scale.
+const WINDOW_MS = 15 * 60_000;
+const MAX_ATTEMPTS = 10;
+
+function createLoginLimiter() {
+  const attempts = new Map(); // key -> {count, windowStart}
+  return function check(key, nowMs) {
+    const entry = attempts.get(key);
+    if (!entry || nowMs - entry.windowStart > WINDOW_MS) {
+      attempts.set(key, { count: 1, windowStart: nowMs });
+      if (attempts.size > 10_000) attempts.clear(); // crude memory bound
+      return true;
+    }
+    entry.count += 1;
+    return entry.count <= MAX_ATTEMPTS;
+  };
+}
 
 module.exports = function authRoutes({ db, auth }) {
   const router = express.Router();
   const byUsername = db.prepare('SELECT * FROM employees WHERE username = ?');
+  const allowAttempt = createLoginLimiter();
 
   router.post('/login', (req, res) => {
     const { username, password } = req.body || {};
+    const key = `${String(username ?? '').toLowerCase()}|${req.ip}`;
+    if (!allowAttempt(key, Date.now())) {
+      return res.status(429).json({ error: 'too many login attempts — try again in 15 minutes' });
+    }
     const user = username ? byUsername.get(String(username).toLowerCase()) : null;
-    if (!user || !verifyPassword(String(password ?? ''), user.password_hash)) {
+    if (!user) {
+      burnScrypt(password);
+      return res.status(401).json({ error: 'invalid username or password' });
+    }
+    if (!verifyPassword(String(password ?? ''), user.password_hash)) {
       return res.status(401).json({ error: 'invalid username or password' });
     }
     auth.setLoginCookie(res, user.id);

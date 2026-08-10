@@ -12,9 +12,10 @@ module.exports = function timewarpRoutes({ auth, clock, broadcast }) {
   });
 
   router.post('/', auth.requireAdmin, (req, res) => {
+    const MAX_ADVANCE_MS = 365 * 24 * 3_600_000; // one year per call
     const advance = Number(req.body?.advance_ms);
-    if (!Number.isInteger(advance) || advance < 0) {
-      return res.status(400).json({ error: 'advance_ms must be a non-negative integer' });
+    if (!Number.isInteger(advance) || advance < 0 || advance > MAX_ADVANCE_MS) {
+      return res.status(400).json({ error: 'advance_ms must be an integer between 0 and one year' });
     }
     clock.advance(advance);
     broadcast();

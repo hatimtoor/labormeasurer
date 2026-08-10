@@ -45,8 +45,8 @@
           <div class="panel">
             <h2>New Task</h2>
             <form id="new-task-form">
-              <input id="task-name" placeholder="Task name (e.g. Frame Unit 101)" required />
-              <input id="task-budget" type="number" min="0" step="0.01" placeholder="Labor budget ($)" required />
+              <input id="task-name" placeholder="Task name (e.g. Frame Unit 101)" aria-label="Task name" required />
+              <input id="task-budget" type="number" min="0" step="0.01" placeholder="Labor budget ($)" aria-label="Labor budget in dollars" required />
               <label class="check"><input type="checkbox" id="task-show-countdown" checked /> Employees can see countdown</label>
               <button class="btn primary" type="submit">Create task</button>
             </form>
@@ -54,10 +54,10 @@
           <div class="panel">
             <h2>New Employee</h2>
             <form id="new-employee-form">
-              <input id="emp-name" placeholder="Full name" required />
-              <input id="emp-username" placeholder="Username" required />
-              <input id="emp-password" type="password" placeholder="Password" required />
-              <input id="emp-rate" type="number" min="0" step="0.01" placeholder="Hourly rate ($/hr)" required />
+              <input id="emp-name" placeholder="Full name" aria-label="Full name" autocomplete="off" required />
+              <input id="emp-username" placeholder="Username" aria-label="Username" autocomplete="off" required />
+              <input id="emp-password" type="password" placeholder="Password (min 8 chars)" aria-label="Password" autocomplete="new-password" minlength="8" required />
+              <input id="emp-rate" type="number" min="0" step="0.01" placeholder="Hourly rate ($/hr)" aria-label="Hourly rate in dollars per hour" required />
               <button class="btn primary" type="submit">Create employee</button>
             </form>
           </div>

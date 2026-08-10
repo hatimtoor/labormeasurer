@@ -49,13 +49,18 @@ const LM = (() => {
       over_budget_cents_live: Math.max(0, -remainingCents),
       remaining_seconds_live: remainingSeconds,
       exhausted_live: snap.exhausted || (burn > 0 && remainingCents <= 0),
+      // mirror the server: uncapped-to-999, and 0 for an untouched zero budget
       pct_consumed_live:
-        snap.budget_cents > 0 ? Math.min(100, (consumedCents / snap.budget_cents) * 100) : 100,
+        snap.budget_cents > 0
+          ? Math.min(999, (consumedCents / snap.budget_cents) * 100)
+          : consumedCents > 0
+            ? 100
+            : 0,
     };
   }
 
   function fmtClock(totalSeconds) {
-    if (totalSeconds == null) return '—:—:—';
+    if (totalSeconds == null || !Number.isFinite(totalSeconds)) return '—:—:—';
     const s = Math.max(0, Math.floor(totalSeconds));
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 60);
@@ -64,6 +69,7 @@ const LM = (() => {
   }
 
   function fmtMoney(cents) {
+    if (!Number.isFinite(cents)) return '$—';
     const sign = cents < 0 ? '−' : '';
     return `${sign}$${(Math.abs(cents) / 100).toLocaleString('en-US', {
       minimumFractionDigits: 2,

@@ -18,8 +18,16 @@ function hashPassword(password) {
 function verifyPassword(password, stored) {
   const [salt, hash] = String(stored).split(':');
   if (!salt || !hash) return false;
-  const candidate = crypto.scryptSync(password, salt, 32).toString('hex');
-  return crypto.timingSafeEqual(Buffer.from(candidate, 'hex'), Buffer.from(hash, 'hex'));
+  const candidateBuf = crypto.scryptSync(password, salt, 32);
+  const hashBuf = Buffer.from(hash, 'hex');
+  if (candidateBuf.length !== hashBuf.length) return false; // corrupted hash → clean 401, not a 500
+  return crypto.timingSafeEqual(candidateBuf, hashBuf);
+}
+
+// burn the same scrypt cost when the username doesn't exist, so response
+// timing can't be used to enumerate valid usernames
+function burnScrypt(password) {
+  crypto.scryptSync(String(password ?? ''), 'timing-equalizer-salt', 32);
 }
 
 function getSecret(db) {
@@ -66,7 +74,10 @@ function readCookies(req) {
 // middleware factory: attaches req.user (employee row) when the cookie is valid
 function createAuth(db) {
   const secret = getSecret(db);
-  const getEmployee = db.prepare('SELECT * FROM employees WHERE id = ?');
+  // explicit columns — password_hash must never ride along on req.user
+  const getEmployee = db.prepare(
+    'SELECT id, name, username, hourly_rate_cents, is_admin FROM employees WHERE id = ?'
+  );
 
   function attachUser(req, _res, next) {
     const id = parseCookie(readCookies(req)[COOKIE_NAME], secret);
@@ -85,10 +96,12 @@ function createAuth(db) {
     next();
   }
 
+  const secureFlag = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+
   function setLoginCookie(res, employeeId) {
     res.setHeader(
       'Set-Cookie',
-      `${COOKIE_NAME}=${makeCookie(employeeId, secret)}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_TTL_MS / 1000}`
+      `${COOKIE_NAME}=${makeCookie(employeeId, secret)}; HttpOnly; Path=/; SameSite=Lax${secureFlag}; Max-Age=${SESSION_TTL_MS / 1000}`
     );
   }
 
@@ -99,4 +112,4 @@ function createAuth(db) {
   return { attachUser, requireAuth, requireAdmin, setLoginCookie, clearLoginCookie };
 }
 
-module.exports = { createAuth, hashPassword, verifyPassword, COOKIE_NAME };
+module.exports = { createAuth, hashPassword, verifyPassword, burnScrypt, COOKIE_NAME };
