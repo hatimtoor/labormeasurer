@@ -18,6 +18,7 @@ function createSqlData(db) {
           [name, budget_cents, show_countdown_to_employees]
         )
       ).id,
+    deleteTask: (id) => db.run('DELETE FROM tasks WHERE id = ?', [id]), // cascades sessions/assignments
     async updateTask(id, fields) {
       const allowed = ['name', 'budget_cents', 'status', 'show_countdown_to_employees'];
       const updates = [];
@@ -55,6 +56,9 @@ function createSqlData(db) {
       if (updates.length) await db.run(`UPDATE employees SET ${updates.join(', ')} WHERE id = ?`, [...params, id]);
     },
     countEmployees: async () => Number((await db.get('SELECT COUNT(*) AS n FROM employees')).n),
+    countSessionsForEmployee: async (id) =>
+      Number((await db.get('SELECT COUNT(*) AS n FROM sessions WHERE employee_id = ?', [id])).n),
+    deleteEmployee: (id) => db.run('DELETE FROM employees WHERE id = ?', [id]),
 
     // --- assignments ---
     isAssigned: async (taskId, employeeId) =>

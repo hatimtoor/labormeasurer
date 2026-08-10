@@ -78,5 +78,25 @@ module.exports = function employeeRoutes({ data, auth, broadcast }) {
     }
   });
 
+  // deletable only when they have no recorded hours — worked time is payroll
+  // history and must never be silently erased (archive-style retention)
+  router.delete('/:id', auth.requireAdmin, async (req, res, next) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id)) return res.status(400).json({ error: 'invalid employee id' });
+      if (id === req.user.id) return res.status(409).json({ error: 'cannot delete your own account' });
+      const emp = await data.getEmployee(id);
+      if (!emp) return res.status(404).json({ error: 'no such employee' });
+      if ((await data.countSessionsForEmployee(id)) > 0) {
+        return res.status(409).json({ error: 'employee has recorded hours — cannot delete' });
+      }
+      await data.deleteEmployee(id);
+      broadcast();
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   return router;
 };

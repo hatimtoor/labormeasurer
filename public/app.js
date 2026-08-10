@@ -1,12 +1,17 @@
 'use strict';
 
-/* SPA: login → admin dashboard or employee view. State arrives via SSE
-   full-state snapshots (LM.ingest); a 1 Hz render loop extrapolates. */
+/* SPA: login → tabbed admin view or employee view. State arrives via SSE
+   full-state snapshots (LM.ingest). Cards fully rebuild ONLY when their
+   snapshot/selection/roster changes; the 1 Hz tick just rewrites numbers
+   in place — rebuilding DOM every second eats clicks and wipes UI state. */
 
 let me = null;
 let employees = []; // admin only
+let employeesVersion = ''; // roster fingerprint
+let rosterRev = 0; // bumped when the roster changes; part of the card signature
 let eventSource = null;
 let selectedTaskId = null; // clicked card highlight
+let lastEmployeesFetch = 0;
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -59,10 +64,16 @@ function enterApp() {
   show(me.is_admin ? 'admin-view' : 'employee-view');
   connectSse();
   refreshTasks();
-  if (me.is_admin) refreshEmployees();
+  if (me.is_admin) refreshEmployees(true);
 }
 
 /* ---------- data ---------- */
+
+// after a mutation: SSE broadcast delivers the update; only refetch when the
+// stream is down, so mutations don't pay for a redundant GET round-trip
+function syncTasks() {
+  if (!eventSource || eventSource.readyState !== EventSource.OPEN) refreshTasks();
+}
 
 async function refreshTasks() {
   try {
@@ -73,10 +84,18 @@ async function refreshTasks() {
   }
 }
 
-async function refreshEmployees() {
+// throttled: SSE fires this on every snapshot, but the roster rarely changes
+async function refreshEmployees(force = false) {
+  if (!force && Date.now() - lastEmployeesFetch < 15000) return;
+  lastEmployeesFetch = Date.now();
   employees = await api('/api/employees');
-  renderEmployeeList();
-  render();
+  const version = JSON.stringify(employees.map((e) => [e.id, e.name, e.hourly_rate_cents]));
+  if (version !== employeesVersion) {
+    employeesVersion = version;
+    rosterRev += 1;
+    renderEmployeeList();
+    render(); // admin-control rosters inside cards depend on the roster
+  }
 }
 
 function connectSse() {
@@ -92,7 +111,7 @@ function connectSse() {
     setConnectionState(true);
     LM.ingest(data);
     render();
-    if (me?.is_admin) refreshEmployees(); // keep roster in sync across admin tabs
+    if (me?.is_admin) refreshEmployees().catch(() => {});
   };
   eventSource.addEventListener('init', onSnap);
   eventSource.addEventListener('snapshot', onSnap);
@@ -105,7 +124,7 @@ function connectSse() {
         try {
           await api('/api/me');
           connectSse();
-          refreshTasks();
+          syncTasks();
         } catch {
           location.reload(); // session gone — back to login
         }
@@ -134,8 +153,8 @@ function setConnectionState(up) {
 function render() {
   if (!me) return;
   const container = me.is_admin ? $('#task-cards') : $('#employee-tasks');
+  if (!container) return;
   const ids = [...LM.snapshots.keys()];
-  // rebuild cards only when the set of tasks changes; otherwise update in place
   for (const id of ids) {
     let card = container.querySelector(`[data-task="${id}"]`);
     if (!card) {
@@ -151,7 +170,6 @@ function render() {
       container.appendChild(card);
     }
     updateCard(card, id);
-    card.classList.toggle('selected', id === selectedTaskId);
   }
   for (const card of [...container.querySelectorAll('[data-task]')]) {
     if (!ids.includes(Number(card.dataset.task))) card.remove();
@@ -162,21 +180,23 @@ function updateCard(card, taskId) {
   const s = LM.liveState(taskId);
   if (!s) return;
 
-  // don't clobber the card only while the user is TYPING in a text field —
-  // focus on summaries/checkboxes/buttons must not freeze live updates
-  const active = document.activeElement;
+  // Structural signature: rebuild only when the underlying snapshot, the
+  // selection, the roster, or the live exhausted state changes.
+  const selected = taskId === selectedTaskId;
+  const sig = `${s.at_ms}|${selected ? 1 : 0}|${s.redacted ? 1 : 0}|${s.exhausted_live ? 1 : 0}|${rosterRev}`;
+
   const typing =
-    card.contains(active) &&
-    active.tagName === 'INPUT' &&
-    ['number', 'text', 'password'].includes(active.type);
-  if (typing) {
-    tickCountdownOnly(card, s);
+    card.contains(document.activeElement) && document.activeElement.tagName === 'INPUT';
+
+  if (card.dataset.sig === sig || typing) {
+    tickLive(card, s);
+    card.classList.toggle('selected', selected);
     return;
   }
-  const detailsWasOpen = card.querySelector('.admin-controls')?.open;
+  card.dataset.sig = sig;
 
   if (s.redacted) {
-    card.className = 'task-card redacted';
+    card.className = `task-card redacted${selected ? ' selected' : ''}`;
     card.innerHTML = `
       <div class="card-head"><h3>${esc(s.name)}</h3><span class="badge">countdown hidden</span></div>
       <p class="muted">Management has not shared the budget countdown for this task.</p>
@@ -189,7 +209,11 @@ function updateCard(card, taskId) {
   const activeCount = (s.active_employee_ids || []).length;
   const paused = activeCount === 0;
   const freeCrew = !paused && s.burn_rate_cents_per_hour === 0; // $0/hr workers clocked in
-  card.className = `task-card${exhausted ? ' exhausted' : ''}${paused ? ' paused' : ''}${s.status === 'archived' ? ' archived' : ''}`;
+  const detailsWasOpen = card.querySelector('.admin-controls')?.open;
+
+  card.className =
+    `task-card${exhausted ? ' exhausted' : ''}${paused ? ' paused' : ''}` +
+    `${s.status === 'archived' ? ' archived' : ''}${selected ? ' selected' : ''}`;
 
   const crew = s.employees.filter((e) => e.clocked_in);
   card.innerHTML = `
@@ -198,36 +222,27 @@ function updateCard(card, taskId) {
       ${s.status === 'archived' ? '<span class="badge">archived</span>' : ''}
       ${!s.show_countdown_to_employees ? '<span class="badge">hidden from crew</span>' : ''}
     </div>
-    ${exhausted ? '<div class="exhausted-banner">⚠ LABOR BUDGET EXHAUSTED</div>' : ''}
+    <div class="banner-slot">${exhausted ? '<div class="exhausted-banner">⚠ LABOR BUDGET EXHAUSTED</div>' : ''}</div>
     <div class="countdown ${exhausted ? 'red' : paused ? 'gray' : 'green'}">
       ${exhausted ? '0:00:00' : freeCrew ? '∞' : LM.fmtClock(s.remaining_seconds_live)}
     </div>
-    <div class="countdown-sub">
-      ${
-        exhausted
-          ? `<span class="over">${LM.fmtMoney(-s.over_budget_cents_live)} over budget</span>`
-          : paused
-            ? 'paused — no one clocked in'
-            : freeCrew
-              ? 'crew clocked in at $0/hr — budget not burning'
-              : `remaining at ${LM.fmtMoney(s.burn_rate_cents_per_hour)}/hr crew burn rate`
-      }
-    </div>
-    <div class="bar"><div class="bar-fill ${exhausted ? 'red' : ''}" style="width:${Math.min(100, s.pct_consumed_live).toFixed(1)}%"></div></div>
+    <div class="countdown-sub"></div>
+    <div class="bar"><div class="bar-fill ${exhausted ? 'red' : ''}"></div></div>
     <div class="stats">
       <div><span class="muted">Budget</span><strong>${LM.fmtMoney(s.budget_cents)}</strong></div>
-      <div><span class="muted">Used</span><strong>${LM.fmtMoney(Math.round(s.consumed_cents_live))}</strong></div>
-      <div><span class="muted">Remaining</span><strong class="${s.remaining_cents_live < 0 ? 'neg' : ''}">${LM.fmtMoney(Math.round(s.remaining_cents_live))}</strong></div>
-      <div><span class="muted">Used %</span><strong>${s.pct_consumed_live.toFixed(1)}%</strong></div>
+      <div><span class="muted">Used</span><strong data-live="used"></strong></div>
+      <div><span class="muted">Remaining</span><strong data-live="remaining"></strong></div>
+      <div><span class="muted">Used %</span><strong data-live="pct"></strong></div>
       <div><span class="muted">Crew now</span><strong>${crew.length}</strong></div>
       <div><span class="muted">Crew cost</span><strong>${LM.fmtMoney(s.burn_rate_cents_per_hour)}/hr</strong></div>
-      <div><span class="muted">Hours worked</span><strong>${LM.fmtHours(s.total_worked_ms)}</strong></div>
+      <div><span class="muted">Hours worked</span><strong data-live="hours"></strong></div>
       <div><span class="muted">Budget hours @ crew</span><strong>${s.budgeted_seconds_at_current_burn != null ? LM.fmtClock(s.budgeted_seconds_at_current_burn) : '—'}</strong></div>
     </div>
     ${renderEmployeeTable(s)}
     <div class="clock-actions"></div>
     ${me.is_admin ? renderAdminControls(s) : ''}`;
 
+  tickLive(card, s);
   renderClockButtons(card.querySelector('.clock-actions'), s);
   if (me.is_admin) {
     wireAdminControls(card, s);
@@ -236,19 +251,51 @@ function updateCard(card, taskId) {
   }
 }
 
-// lightweight per-tick update used while the user is typing inside the card
-function tickCountdownOnly(card, s) {
+// per-second update of live numbers only — never touches DOM structure
+function tickLive(card, s) {
   if (s.redacted) return;
+  const exhausted = s.exhausted_live;
+  const paused = (s.active_employee_ids || []).length === 0;
+  const freeCrew = !paused && s.burn_rate_cents_per_hour === 0;
+
   const clock = card.querySelector('.countdown');
-  if (clock) clock.textContent = s.exhausted_live ? '0:00:00' : LM.fmtClock(s.remaining_seconds_live);
-  const fill = card.querySelector('.bar-fill');
-  if (fill) fill.style.width = `${Math.min(100, s.pct_consumed_live).toFixed(1)}%`;
-  // keep the exhausted state honest even in the light path
-  card.classList.toggle('exhausted', !!s.exhausted_live);
-  const sub = card.querySelector('.countdown-sub');
-  if (sub && s.exhausted_live) {
-    sub.innerHTML = `<span class="over">${LM.fmtMoney(-s.over_budget_cents_live)} over budget</span>`;
+  if (clock) {
+    clock.textContent = exhausted ? '0:00:00' : freeCrew ? '∞' : LM.fmtClock(s.remaining_seconds_live);
+    clock.className = `countdown ${exhausted ? 'red' : paused ? 'gray' : 'green'}`;
   }
+  const sub = card.querySelector('.countdown-sub');
+  if (sub) {
+    sub.innerHTML = exhausted
+      ? `<span class="over">${LM.fmtMoney(-s.over_budget_cents_live)} over budget</span>`
+      : paused
+        ? 'paused — no one clocked in'
+        : freeCrew
+          ? 'crew clocked in at $0/hr — budget not burning'
+          : `remaining at ${LM.fmtMoney(s.burn_rate_cents_per_hour)}/hr crew burn rate`;
+  }
+  const fill = card.querySelector('.bar-fill');
+  if (fill) {
+    fill.style.width = `${Math.min(100, s.pct_consumed_live).toFixed(1)}%`;
+    fill.classList.toggle('red', exhausted);
+  }
+  const set = (key, value) => {
+    const el = card.querySelector(`[data-live="${key}"]`);
+    if (el) el.textContent = value;
+  };
+  set('used', LM.fmtMoney(Math.round(s.consumed_cents_live)));
+  set('remaining', LM.fmtMoney(Math.round(s.remaining_cents_live)));
+  const rem = card.querySelector('[data-live="remaining"]');
+  if (rem) rem.classList.toggle('neg', s.remaining_cents_live < 0);
+  set('pct', `${s.pct_consumed_live.toFixed(1)}%`);
+  set('hours', LM.fmtHours(s.total_worked_ms + liveExtraMs(s)));
+}
+
+// actual worked ms keeps growing while people are clocked in
+function liveExtraMs(s) {
+  const entry = LM.snapshots.get(s.task_id);
+  if (!entry) return 0;
+  const active = (s.active_employee_ids || []).length;
+  return active * Math.max(0, performance.now() - entry.receivedAtPerf);
 }
 
 function renderEmployeeTable(s) {
@@ -285,10 +332,14 @@ function renderClockButtons(el, s) {
   btn.className = `btn big ${mine ? 'toggle-on' : 'primary'}`;
   btn.textContent = mine ? '● On the clock — press to clock OUT' : 'Clock IN';
   btn.onclick = async () => {
+    btn.disabled = true;
     try {
       await api(`/api/tasks/${s.task_id}/clock-${mine ? 'out' : 'in'}`, { method: 'POST' });
+      syncTasks();
     } catch (err) {
       toast(err.message, true);
+    } finally {
+      btn.disabled = false;
     }
   };
   el.appendChild(btn);
@@ -320,6 +371,10 @@ function renderAdminControls(s) {
       <button class="btn small" data-set-budget>Set budget</button>
     </div>
     <label class="check"><input type="checkbox" data-show-countdown ${s.show_countdown_to_employees ? 'checked' : ''}/> Crew can see countdown</label>
+    <div class="inline-form">
+      <button class="btn small" data-archive>${s.status === 'archived' ? 'Unarchive' : 'Archive'}</button>
+      <button class="btn small danger" data-delete>Delete task</button>
+    </div>
   </details>`;
 }
 
@@ -335,6 +390,7 @@ function wireAdminControls(card, s) {
       else ids.delete(toggled);
       try {
         await api(`/api/tasks/${s.task_id}/assignments`, { method: 'PUT', body: { employee_ids: [...ids] } });
+        syncTasks();
       } catch (err) {
         toast(err.message, true);
       }
@@ -342,13 +398,17 @@ function wireAdminControls(card, s) {
   });
   card.querySelectorAll('[data-clock]').forEach((btn) => {
     btn.onclick = async () => {
+      btn.disabled = true;
       try {
         await api(`/api/tasks/${s.task_id}/clock-${btn.dataset.dir}`, {
           method: 'POST',
           body: { employee_id: Number(btn.dataset.clock) },
         });
+        syncTasks();
       } catch (err) {
         toast(err.data?.open_task_id ? 'Already clocked into another task' : err.message, true);
+      } finally {
+        btn.disabled = false;
       }
     };
   });
@@ -360,6 +420,34 @@ function wireAdminControls(card, s) {
       try {
         await api(`/api/tasks/${s.task_id}`, { method: 'PATCH', body: { budget_cents: Math.round(dollars * 100) } });
         toast('Budget updated');
+        syncTasks();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+  const archiveBtn = card.querySelector('[data-archive]');
+  if (archiveBtn) {
+    archiveBtn.onclick = async () => {
+      try {
+        await api(`/api/tasks/${s.task_id}`, {
+          method: 'PATCH',
+          body: { status: s.status === 'archived' ? 'active' : 'archived' },
+        });
+        syncTasks();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+  const deleteBtn = card.querySelector('[data-delete]');
+  if (deleteBtn) {
+    deleteBtn.onclick = async () => {
+      if (!confirm(`Permanently delete "${s.name}" and all its recorded hours? Archiving keeps history.`)) return;
+      try {
+        await api(`/api/tasks/${s.task_id}`, { method: 'DELETE' });
+        toast('Task deleted');
+        syncTasks();
       } catch (err) {
         toast(err.message, true);
       }
@@ -370,6 +458,7 @@ function wireAdminControls(card, s) {
     showBox.onchange = async () => {
       try {
         await api(`/api/tasks/${s.task_id}`, { method: 'PATCH', body: { show_countdown_to_employees: showBox.checked } });
+        syncTasks();
       } catch (err) {
         toast(err.message, true);
       }
@@ -379,17 +468,34 @@ function wireAdminControls(card, s) {
 
 function renderEmployeeList() {
   const el = $('#employee-list');
+  if (!el) return;
+  // never wipe the list while the admin is editing a rate in it
+  if (el.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
   el.innerHTML = employees
     .map(
       (e) => `<div class="emp-row">
         <span>${esc(e.name)}${e.is_admin ? ' <span class="badge">admin</span>' : ''}</span>
         <span class="emp-rate">
-          <input type="number" min="0" step="0.01" value="${(e.hourly_rate_cents / 100).toFixed(2)}" data-rate="${e.id}" />
+          <input type="number" min="0" step="0.01" value="${(e.hourly_rate_cents / 100).toFixed(2)}" data-rate="${e.id}" aria-label="Hourly rate for ${esc(e.name)}" />
           <span class="muted">/hr</span>
+          ${e.id !== me.id ? `<button class="btn small ghost" data-del-emp="${e.id}" title="Delete (only possible before any hours are recorded)">✕</button>` : ''}
         </span>
       </div>`
     )
     .join('');
+  el.querySelectorAll('[data-del-emp]').forEach((btn) => {
+    btn.onclick = async () => {
+      const emp = employees.find((x) => x.id === Number(btn.dataset.delEmp));
+      if (!confirm(`Delete ${emp?.name ?? 'this employee'}? Only possible if they have no recorded hours.`)) return;
+      try {
+        await api(`/api/employees/${btn.dataset.delEmp}`, { method: 'DELETE' });
+        toast('Employee deleted');
+        refreshEmployees(true);
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  });
   el.querySelectorAll('[data-rate]').forEach((input) => {
     input.onchange = async () => {
       try {
@@ -398,7 +504,7 @@ function renderEmployeeList() {
           body: { hourly_rate_cents: Math.round(Number(input.value) * 100) },
         });
         toast('Rate updated (applies to next clock-in)');
-        refreshEmployees();
+        refreshEmployees(true);
       } catch (err) {
         toast(err.message, true);
       }
@@ -454,6 +560,7 @@ $('#new-task-form').addEventListener('submit', async (e) => {
     e.target.reset();
     $('#task-show-countdown').checked = true;
     toast('Task created');
+    syncTasks();
   } catch (err) {
     toast(err.message, true);
   }
@@ -473,7 +580,7 @@ $('#new-employee-form').addEventListener('submit', async (e) => {
     });
     e.target.reset();
     toast('Employee created');
-    refreshEmployees();
+    refreshEmployees(true);
   } catch (err) {
     toast(err.message, true);
   }
@@ -481,11 +588,15 @@ $('#new-employee-form').addEventListener('submit', async (e) => {
 
 document.querySelectorAll('[data-warp]').forEach((btn) => {
   btn.addEventListener('click', async () => {
+    btn.disabled = true;
     try {
       const res = await api('/api/timewarp', { method: 'POST', body: { advance_ms: Number(btn.dataset.warp) } });
       toast(`Clock advanced — ${(res.offset_ms / 3_600_000).toFixed(2)} h warped in total`);
+      syncTasks();
     } catch (err) {
       toast(err.message, true);
+    } finally {
+      btn.disabled = false;
     }
   });
 });
@@ -500,7 +611,7 @@ document.querySelectorAll('#admin-tabs .tab').forEach((btn) => {
   });
 });
 
-// 1 Hz render loop — recompute-from-snapshot, never decrement
+// 1 Hz tick — live numbers only; DOM structure changes only on real events
 setInterval(() => {
   if (me) render();
 }, 1000);

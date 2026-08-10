@@ -85,21 +85,34 @@ module.exports = function taskRoutes({ data, store, auth, clock, broadcast }) {
     }
   });
 
-  // full-replace assignment set; closes open sessions of removed workers
-  router.put('/:id/assignments', auth.requireAdmin, async (req, res, next) => {
+  // permanent removal — history goes with it (archive keeps history instead)
+  router.delete('/:id', auth.requireAdmin, async (req, res, next) => {
     try {
       const taskId = intParam(req.params.id);
       if (taskId == null) return res.status(400).json({ error: 'invalid task id' });
       const task = await data.getTask(taskId);
       if (!task) return res.status(404).json({ error: 'no such task' });
+      await data.deleteTask(taskId);
+      broadcast();
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // full-replace assignment set; closes open sessions of removed workers
+  router.put('/:id/assignments', auth.requireAdmin, async (req, res, next) => {
+    try {
+      const taskId = intParam(req.params.id);
+      if (taskId == null) return res.status(400).json({ error: 'invalid task id' });
       const ids = req.body?.employee_ids;
       if (!Array.isArray(ids) || ids.some((i) => !Number.isInteger(i))) {
         return res.status(400).json({ error: 'employee_ids must be an array of integers' });
       }
-      const unknown = [];
-      for (const id of ids) {
-        if (!(await data.getEmployee(id))) unknown.push(id);
-      }
+      // task fetch + employee validation in one parallel burst
+      const [task, ...found] = await Promise.all([data.getTask(taskId), ...ids.map((id) => data.getEmployee(id))]);
+      if (!task) return res.status(404).json({ error: 'no such task' });
+      const unknown = ids.filter((_, i) => !found[i]);
       if (unknown.length) {
         return res.status(400).json({ error: `unknown employee ids: ${unknown.join(', ')}` });
       }

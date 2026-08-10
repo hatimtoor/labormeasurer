@@ -59,17 +59,24 @@ function createSseHub(store) {
     }
   }
 
-  // fire-and-forget from mutation routes; errors must never crash a request
+  // fire-and-forget from mutation routes; errors must never crash a request.
+  // Coalesced: bursts of mutations (e.g. several clock events) trigger one
+  // snapshot fetch ~50ms later instead of one fetch per mutation.
+  let broadcastTimer = null;
   function broadcast() {
-    nextEventId += 1;
-    store
-      .allSnapshots()
-      .then((snaps) => {
-        for (const client of [...clients]) {
-          writeEvent(client, 'snapshot', payloadFor(client, snaps));
-        }
-      })
-      .catch((err) => console.error('broadcast failed:', err.message));
+    if (broadcastTimer) return;
+    broadcastTimer = setTimeout(() => {
+      broadcastTimer = null;
+      nextEventId += 1;
+      store
+        .allSnapshots()
+        .then((snaps) => {
+          for (const client of [...clients]) {
+            writeEvent(client, 'snapshot', payloadFor(client, snaps));
+          }
+        })
+        .catch((err) => console.error('broadcast failed:', err.message));
+    }, 50);
   }
 
   const MAX_CONNECTIONS_PER_USER = 5;

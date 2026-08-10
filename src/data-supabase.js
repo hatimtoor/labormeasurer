@@ -21,6 +21,21 @@ function createSupabaseData(projectUrl, serviceRoleKey) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  // PostgREST silently caps result sets (default max-rows 1000). Session
+  // history grows without bound, and a truncated read would silently
+  // under-report consumed budget — so page through explicitly.
+  const PAGE = 1000;
+  async function fetchAllSessions() {
+    const all = [];
+    for (let from = 0; ; from += PAGE) {
+      const rows = unwrap(
+        await sb.from('sessions').select('*').order('clock_in_ms').order('id').range(from, from + PAGE - 1)
+      );
+      all.push(...rows);
+      if (rows.length < PAGE) return all;
+    }
+  }
+
   const EMPLOYEE_COLUMNS = 'id, name, username, hourly_rate_cents, is_admin';
 
   return {
@@ -28,6 +43,9 @@ function createSupabaseData(projectUrl, serviceRoleKey) {
     getTask: async (id) => unwrap(await sb.from('tasks').select('*').eq('id', id).maybeSingle()) || undefined,
     getTasks: async () => unwrap(await sb.from('tasks').select('*').order('id')),
     insertTask: async (row) => unwrap(await sb.from('tasks').insert(row).select('id').single()).id,
+    deleteTask: async (id) => {
+      unwrap(await sb.from('tasks').delete().eq('id', id)); // FK cascade removes sessions/assignments
+    },
     async updateTask(id, fields) {
       const clean = {};
       for (const key of ['name', 'budget_cents', 'status', 'show_countdown_to_employees']) {
@@ -55,6 +73,17 @@ function createSupabaseData(projectUrl, serviceRoleKey) {
       if (error) throw new Error(error.message);
       return count ?? 0;
     },
+    countSessionsForEmployee: async (id) => {
+      const { count, error } = await sb
+        .from('sessions')
+        .select('id', { count: 'exact', head: true })
+        .eq('employee_id', id);
+      if (error) throw new Error(error.message);
+      return count ?? 0;
+    },
+    deleteEmployee: async (id) => {
+      unwrap(await sb.from('employees').delete().eq('id', id));
+    },
 
     // --- assignments ---
     isAssigned: async (taskId, employeeId) =>
@@ -63,16 +92,41 @@ function createSupabaseData(projectUrl, serviceRoleKey) {
       ),
     async replaceAssignments(taskId, employeeIds, nowMs) {
       // best-effort sequence (PostgREST has no multi-statement transactions);
-      // order matters: close removed workers' sessions BEFORE touching rows
-      const keep = new Set(employeeIds);
-      const open = unwrap(
-        await sb.from('sessions').select('id, employee_id, clock_in_ms').eq('task_id', taskId).is('clock_out_ms', null)
-      );
-      for (const s of open) {
-        if (!keep.has(s.employee_id)) {
+      // order matters: close removed workers' sessions BEFORE touching rows.
+      // Bulk close in one call; fall back to per-row clamped closes only if
+      // the clock_out >= clock_in CHECK rejects the bulk value.
+      const closeQuery = sb
+        .from('sessions')
+        .update({ clock_out_ms: nowMs })
+        .eq('task_id', taskId)
+        .is('clock_out_ms', null);
+      try {
+        // session-close and assignment-delete touch different tables — parallel
+        const [closed, deleted] = await Promise.all([
+          employeeIds.length ? closeQuery.not('employee_id', 'in', `(${employeeIds.join(',')})`) : closeQuery,
+          sb.from('assignments').delete().eq('task_id', taskId),
+        ]);
+        unwrap(closed);
+        unwrap(deleted);
+        if (employeeIds.length) {
           unwrap(
-            await sb.from('sessions').update({ clock_out_ms: Math.max(nowMs, s.clock_in_ms) }).eq('id', s.id)
+            await sb.from('assignments').insert(employeeIds.map((employee_id) => ({ task_id: taskId, employee_id })))
           );
+        }
+        return;
+      } catch (err) {
+        // only the clock_out >= clock_in CHECK rejection (clock stepped
+        // backwards) is recoverable via the per-row clamped path — anything
+        // else (outage, auth, timeout) must propagate
+        if (err.code !== '23514' && !/check constraint/i.test(String(err.message))) throw err;
+        const open = unwrap(
+          await sb.from('sessions').select('id, employee_id, clock_in_ms').eq('task_id', taskId).is('clock_out_ms', null)
+        );
+        const keep = new Set(employeeIds);
+        for (const s of open) {
+          if (!keep.has(s.employee_id)) {
+            unwrap(await sb.from('sessions').update({ clock_out_ms: Math.max(nowMs, s.clock_in_ms) }).eq('id', s.id));
+          }
         }
       }
       unwrap(await sb.from('assignments').delete().eq('task_id', taskId));
@@ -96,7 +150,7 @@ function createSupabaseData(projectUrl, serviceRoleKey) {
     async getSnapshotBundle() {
       const [tasks, sessions, assignmentRows, employeeNames] = await Promise.all([
         sb.from('tasks').select('*').order('id').then(unwrap),
-        sb.from('sessions').select('*').order('clock_in_ms').then(unwrap),
+        fetchAllSessions(),
         sb.from('assignments').select('task_id, employees(id, name, hourly_rate_cents)').then(unwrap),
         sb.from('employees').select('id, name').then(unwrap),
       ]);
@@ -120,10 +174,12 @@ function createSupabaseData(projectUrl, serviceRoleKey) {
 
     // --- maintenance ---
     async wipeAll() {
-      for (const table of ['sessions', 'assignments', 'tasks', 'employees', 'settings']) {
-        const keyCol = table === 'settings' ? 'key' : 'id';
-        unwrap(await sb.from(table).delete().neq(keyCol, table === 'settings' ? '' : -1));
-      }
+      // PostgREST requires a filter on DELETE; match-all via always-true bounds
+      unwrap(await sb.from('sessions').delete().gte('id', 0));
+      unwrap(await sb.from('assignments').delete().gte('task_id', 0)); // composite PK, no id column
+      unwrap(await sb.from('tasks').delete().gte('id', 0));
+      unwrap(await sb.from('employees').delete().gte('id', 0));
+      unwrap(await sb.from('settings').delete().neq('key', ''));
     },
     close: async () => {},
   };

@@ -24,9 +24,10 @@ async function createApp({ data, clock }) {
     );
     next();
   });
+  // static assets need no auth — keep them off the data backend entirely
+  app.use(express.static(path.join(__dirname, '..', 'public')));
   app.use(express.json({ limit: '50kb' }));
   app.use(auth.attachUser);
-  app.use(express.static(path.join(__dirname, '..', 'public')));
 
   const deps = { data, store, auth, clock, broadcast };
   app.use('/api', require('./routes/auth.routes')(deps));

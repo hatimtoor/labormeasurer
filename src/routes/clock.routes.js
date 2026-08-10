@@ -6,39 +6,41 @@ const { isUniqueViolation } = require('../db');
 module.exports = function clockRoutes({ data, auth, clock, broadcast }) {
   const router = express.Router();
 
-  async function resolveTarget(req, res) {
-    let employeeId = req.user.id;
-    if (req.body?.employee_id != null) {
-      if (!req.user.is_admin) {
-        res.status(403).json({ error: 'only admins may clock others in/out' });
-        return null;
-      }
-      employeeId = Number(req.body.employee_id);
-      if (!Number.isInteger(employeeId)) {
-        res.status(400).json({ error: 'invalid employee_id' });
-        return null;
-      }
-    }
-    const employee = await data.getEmployee(employeeId);
-    if (!employee) {
-      res.status(404).json({ error: 'no such employee' });
+  // Determines who is being clocked in/out and validates permission for it.
+  // Returns null after writing the error response.
+  function resolveTargetId(req, res) {
+    if (req.body?.employee_id == null) return req.user.id;
+    if (!req.user.is_admin) {
+      res.status(403).json({ error: 'only admins may clock others in/out' });
       return null;
     }
-    return employee;
+    const id = Number(req.body.employee_id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: 'invalid employee_id' });
+      return null;
+    }
+    return id;
   }
 
   router.post('/:id/clock-in', auth.requireAuth, async (req, res, next) => {
     try {
-      const task = await data.getTask(Number(req.params.id));
+      const taskId = Number(req.params.id);
+      const targetId = resolveTargetId(req, res);
+      if (targetId == null) return;
+
+      // one parallel burst — REST round-trips dominate latency on Supabase
+      const [task, employee, assigned, open] = await Promise.all([
+        data.getTask(taskId),
+        data.getEmployee(targetId),
+        data.isAssigned(taskId, targetId),
+        data.getOpenSession(targetId),
+      ]);
       if (!task) return res.status(404).json({ error: 'no such task' });
       if (task.status !== 'active') return res.status(409).json({ error: 'task is archived' });
-      const employee = await resolveTarget(req, res);
-      if (!employee) return;
-      if (!req.user.is_admin && !(await data.isAssigned(task.id, employee.id))) {
+      if (!employee) return res.status(404).json({ error: 'no such employee' });
+      if (!req.user.is_admin && !assigned) {
         return res.status(403).json({ error: 'not assigned to this task' });
       }
-
-      const open = await data.getOpenSession(employee.id);
       if (open) {
         if (open.task_id === task.id) {
           // idempotent double clock-in
@@ -71,12 +73,17 @@ module.exports = function clockRoutes({ data, auth, clock, broadcast }) {
 
   router.post('/:id/clock-out', auth.requireAuth, async (req, res, next) => {
     try {
-      const task = await data.getTask(Number(req.params.id));
-      if (!task) return res.status(404).json({ error: 'no such task' });
-      const employee = await resolveTarget(req, res);
-      if (!employee) return;
+      const taskId = Number(req.params.id);
+      const targetId = resolveTargetId(req, res);
+      if (targetId == null) return;
 
-      const open = await data.getOpenSession(employee.id);
+      const [task, employee, open] = await Promise.all([
+        data.getTask(taskId),
+        data.getEmployee(targetId),
+        data.getOpenSession(targetId),
+      ]);
+      if (!task) return res.status(404).json({ error: 'no such task' });
+      if (!employee) return res.status(404).json({ error: 'no such employee' });
       if (!open || open.task_id !== task.id) {
         // idempotent no-op
         return res.json({ ok: true, already: true });

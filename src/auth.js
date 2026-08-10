@@ -75,17 +75,30 @@ function readCookies(req) {
 async function createAuth(data) {
   const secret = await getSecret(data);
 
+  // Short-lived user cache: against a REST backend every request would
+  // otherwise cost a network round-trip just to resolve the cookie. 5s is
+  // short enough that rate/name edits propagate almost immediately.
+  const USER_CACHE_TTL_MS = 5000;
+  const userCache = new Map(); // id -> {user, at}
+
+  async function resolveUser(id) {
+    const hit = userCache.get(id);
+    if (hit && Date.now() - hit.at < USER_CACHE_TTL_MS) return hit.user;
+    const user = (await data.getEmployee(id)) || null;
+    userCache.set(id, { user, at: Date.now() });
+    if (userCache.size > 5000) userCache.clear();
+    return user;
+  }
+
   function attachUser(req, _res, next) {
     const id = parseCookie(readCookies(req)[COOKIE_NAME], secret);
     if (id == null) {
       req.user = null;
       return next();
     }
-    // data.getEmployee never includes password_hash
-    data
-      .getEmployee(id)
+    resolveUser(id)
       .then((user) => {
-        req.user = user || null;
+        req.user = user;
         next();
       })
       .catch(next);
