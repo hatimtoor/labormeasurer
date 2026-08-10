@@ -29,10 +29,12 @@ async function main() {
     ids[emp.username] = await data.insertEmployee({ ...emp, password_hash: hashPassword(password) });
   }
 
+  const projectId = await data.insertProject({ name: 'Building A' });
   const taskId = await data.insertTask({
     name: 'Frame Unit 101',
     budget_cents: 100_000,
     show_countdown_to_employees: 1,
+    project_id: projectId,
   });
   await data.replaceAssignments(taskId, [ids.workera, ids.workerb], Date.now());
 

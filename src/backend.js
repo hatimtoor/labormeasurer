@@ -5,6 +5,13 @@
 //   2. SUPABASE_PROJECT_URL + SUPABASE_SERVICE_ROLE_KEY -> Supabase REST API
 //   3. local SQLite file (zero config; also what the tests use)
 async function openDatabase() {
+  // explicit override (e.g. LM_BACKEND=sqlite for local E2E against a file DB
+  // even when Supabase credentials are present in .env)
+  if (process.env.LM_BACKEND === 'sqlite') {
+    const { createSqliteAdapter } = require('./db');
+    const { createSqlData } = require('./data-sql');
+    return { data: createSqlData(createSqliteAdapter(process.env.LM_DB || 'labormeasurer.db')), label: 'local SQLite' };
+  }
   const pgUrl = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
   if (pgUrl) {
     if (!/^postgres(ql)?:\/\//.test(pgUrl)) {

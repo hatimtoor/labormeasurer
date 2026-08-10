@@ -1,6 +1,6 @@
 # LaborMeasurer — Product Requirements Document
 
-**Version:** 1.0 · **Status:** v1 shipped, roadmap approved for planning · **Owner:** Hatim Toor
+**Version:** 1.1 · **Status:** v1 shipped; Phases 1–2 implemented (see §4 notes) · **Owner:** Hatim Toor
 **Origin:** 24-hour development challenge (Singam Singh) — countdown labor budget tracking
 
 ---
@@ -108,7 +108,7 @@ pass in an automated test and were verified live against Supabase.
 Priorities: **P0** = required for real production use · **P1** = strong differentiation /
 major workflow value · **P2** = scale and polish.
 
-### Phase 1 — Production hardening (P0)
+### Phase 1 — Production hardening (P0) — **SHIPPED** (1.1–1.4, 1.5 partial: Docker+CI done, hosting/Sentry pending; 1.6 partial; 1.7 done)
 
 | # | Requirement | Notes |
 |---|---|---|
@@ -120,7 +120,7 @@ major workflow value · **P2** = scale and polish.
 | 1.6 | **Time zone correctness** — store UTC (done), render in site-local zone, handle DST in daily summaries | |
 | 1.7 | **Remove demo affordances from production builds** — time-warp behind an env flag; seeded credentials never in prod | |
 
-### Phase 2 — The manager's power tools (P1)
+### Phase 2 — The manager's power tools (P1) — **SHIPPED** (2.1 as flat projects+rollups; 2.2–2.8 done; alerts are in-app+webhook, email/SMS pending; reports are CSV, payroll formats pending)
 
 | # | Requirement | Notes |
 |---|---|---|

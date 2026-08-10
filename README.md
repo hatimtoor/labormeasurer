@@ -14,6 +14,33 @@ worked hours continue to be recorded, never lost.
 
 ---
 
+## What's in v2 (PRD Phases 1–2)
+
+- **Revocable logins** — server-side sessions; logout and password changes sign out
+  every device instantly. Admins reset worker passwords from the Employees tab.
+- **Audit trail** — every dollar-affecting change (budgets, rates, assignments,
+  corrections, settings, admin clock actions, time-warps, logins) is recorded with
+  actor and before/after values; viewable in Settings.
+- **Timesheet corrections** — adjust or void any session; originals are never
+  mutated, replacements link back, everything is audited.
+- **Labor burden** — true cost = wage × (1 + burden%); frozen per clock-in.
+- **Daily overtime** — configurable threshold and multiplier, computed per
+  employee per org-local day across tasks; live burn rates go to the OT rate.
+- **Hours budgets** — tasks can be budgeted in person-hours instead of dollars;
+  the countdown divides remaining person-hours across the clocked-in crew.
+- **Projects** — group tasks; rollup chips show combined budget/burn/countdown.
+- **Threshold alerts** — in-app admin alerts + optional webhook at 75/90/100%
+  (configurable) of budget.
+- **Reports** — CSV: sessions (payroll-style) and tasks (budget vs actual);
+  burn-down chart per task.
+- **Wall display** — one click turns the Tasks tab into a full-screen site
+  display (Esc exits).
+- **Deployment** — Dockerfile, GitHub Actions CI, production gating for the
+  demo time-warp (off unless ENABLE_TIMEWARP=1).
+
+**Upgrading an existing Supabase project:** run `docs/migrations/002-v2.sql` in
+the Supabase SQL Editor once. SQLite databases migrate themselves at boot.
+
 ## Quick start
 
 ```bash

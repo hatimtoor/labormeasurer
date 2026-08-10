@@ -16,6 +16,7 @@
         <button class="tab" data-tab="settings">Settings</button>
       </nav>
       <div class="topbar-right">
+        <button id="display-btn" class="btn small ghost" hidden title="Full-screen wall display (Esc exits)">🖥 Display</button>
         <span id="whoami"></span>
         <button id="logout-btn" class="btn ghost">Log out</button>
       </div>
@@ -43,11 +44,17 @@
           <h2>Tasks</h2>
           <form id="new-task-form" class="inline-create">
             <input id="task-name" placeholder="New task name" aria-label="Task name" required />
-            <input id="task-budget" type="number" min="0" step="0.01" placeholder="Budget ($)" aria-label="Labor budget in dollars" required />
+            <select id="task-mode" aria-label="Budget type">
+              <option value="money">$ budget</option>
+              <option value="hours">Hours budget</option>
+            </select>
+            <input id="task-budget" type="number" min="0" step="0.01" placeholder="Budget ($)" aria-label="Budget" required />
+            <select id="task-project" aria-label="Project"><option value="">No project</option></select>
             <label class="check"><input type="checkbox" id="task-show-countdown" checked /> Crew sees countdown</label>
             <button class="btn primary" type="submit">+ Create task</button>
           </form>
         </div>
+        <div id="project-strip" class="project-strip"></div>
         <div id="task-cards" class="task-cards"></div>
       </div>
 
@@ -69,14 +76,54 @@
 
       <div class="tab-body" id="tab-settings" hidden>
         <div class="toolbar"><h2>Settings</h2></div>
-        <div class="panel">
-          <h3>🕐 Demo time-warp</h3>
-          <p class="muted small">Advance the domain clock to simulate hours of work in seconds. Advance-only — real clock-ins are unaffected. All dashboards update instantly.</p>
-          <div id="warp-controls" class="warp-row" hidden>
-            <button class="btn" data-warp="600000">+10 min</button>
-            <button class="btn" data-warp="3600000">+1 hour</button>
-            <button class="btn" data-warp="18000000">+5 hours</button>
-            <button class="btn" data-warp="36000000">+10 hours</button>
+        <div class="settings-grid">
+          <div class="panel">
+            <h3>Labor cost rules</h3>
+            <form id="org-settings-form" class="settings-form">
+              <label>Labor burden %
+                <input type="number" id="set-burden" min="0" max="200" step="1" aria-label="Labor burden percent" />
+                <span class="muted small">True cost = wage × (1 + burden/100). Applied at clock-in.</span>
+              </label>
+              <label>Overtime after (hours/day)
+                <input type="number" id="set-ot-threshold" min="0" max="24" step="0.5" aria-label="Overtime threshold hours" />
+                <span class="muted small">0 disables overtime.</span>
+              </label>
+              <label>Overtime multiplier %
+                <input type="number" id="set-ot-mult" min="100" max="300" step="5" aria-label="Overtime multiplier percent" />
+              </label>
+              <label>Site timezone offset (minutes from UTC)
+                <input type="number" id="set-tz" min="-840" max="840" step="15" aria-label="Timezone offset minutes" />
+                <span class="muted small">Sets the daily boundary for overtime. E.g. -300 for EST.</span>
+              </label>
+              <label>Alert thresholds (% of budget)
+                <input type="text" id="set-thresholds" placeholder="75,90,100" aria-label="Alert thresholds" />
+              </label>
+              <label>Alert webhook URL
+                <input type="text" id="set-webhook" placeholder="https:// (optional)" aria-label="Alert webhook URL" />
+                <span class="muted small">POSTs JSON when a task crosses a threshold.</span>
+              </label>
+              <button class="btn primary" type="submit">Save settings</button>
+            </form>
+          </div>
+          <div class="panel">
+            <h3>Reports</h3>
+            <p class="muted small">CSV downloads open in a new tab.</p>
+            <div class="warp-row">
+              <a class="btn" href="/api/reports/tasks.csv" download>Tasks: budget vs actual</a>
+              <a class="btn" href="/api/reports/sessions.csv" download>All work sessions</a>
+            </div>
+            <h3 class="section-gap">🕐 Demo time-warp</h3>
+            <p class="muted small" id="warp-help">Advance the domain clock to simulate hours of work in seconds. Advance-only.</p>
+            <div id="warp-controls" class="warp-row" hidden>
+              <button class="btn" data-warp="600000">+10 min</button>
+              <button class="btn" data-warp="3600000">+1 hour</button>
+              <button class="btn" data-warp="18000000">+5 hours</button>
+              <button class="btn" data-warp="36000000">+10 hours</button>
+            </div>
+          </div>
+          <div class="panel audit-panel">
+            <h3>Audit log</h3>
+            <div id="audit-list" class="audit-list"><p class="muted small">Loading…</p></div>
           </div>
         </div>
       </div>
