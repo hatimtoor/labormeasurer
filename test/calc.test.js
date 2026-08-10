@@ -6,6 +6,7 @@ const { computeTaskSnapshot, MS_PER_HOUR } = require('../src/calc');
 
 const task = (budgetCents) => ({ id: 1, budget_cents: budgetCents });
 const session = (rate, inMs, outMs = null) => ({
+  task_id: 1,
   employee_id: 1,
   rate_cents_snapshot: rate,
   clock_in_ms: inMs,

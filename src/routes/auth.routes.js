@@ -22,7 +22,7 @@ function createLoginLimiter() {
   };
 }
 
-module.exports = function authRoutes({ data, auth }) {
+module.exports = function authRoutes({ data, auth, audit }) {
   const router = express.Router();
   const allowAttempt = createLoginLimiter();
 
@@ -39,18 +39,24 @@ module.exports = function authRoutes({ data, auth }) {
         return res.status(401).json({ error: 'invalid username or password' });
       }
       if (!verifyPassword(String(password ?? ''), user.password_hash)) {
+        audit(req, 'auth.login_failed', 'employee', user.id, { username: user.username });
         return res.status(401).json({ error: 'invalid username or password' });
       }
-      auth.setLoginCookie(res, user.id);
+      await auth.issueSession(res, user.id);
+      audit({ user }, 'auth.login', 'employee', user.id, null);
       res.json({ id: user.id, name: user.name, is_admin: !!user.is_admin });
     } catch (err) {
       next(err);
     }
   });
 
-  router.post('/logout', (req, res) => {
-    auth.clearLoginCookie(res);
-    res.json({ ok: true });
+  router.post('/logout', async (req, res, next) => {
+    try {
+      await auth.revokeCurrentSession(req, res);
+      res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
   });
 
   router.get('/me', auth.requireAuth, (req, res) => {

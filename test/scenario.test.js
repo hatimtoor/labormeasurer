@@ -34,7 +34,7 @@ test('11-step success scenario', async () => {
 
   const snap = async (cookie = admin) => {
     const res = await request(app).get('/api/tasks').set('Cookie', cookie).expect(200);
-    return res.body.find((t) => t.task_id === taskId);
+    return res.body.tasks.find((t) => t.task_id === taskId);
   };
 
   // Steps 2-3: Worker A ($20/hr) clocks in
@@ -128,7 +128,7 @@ test('guards: double clock-in idempotent, second task blocked, employee redactio
   assert.equal(blocked.body.open_task_id, t1);
 
   // employee list: t2 has countdown hidden => redacted (no dollar figures)
-  const list = (await request(app).get('/api/tasks').set('Cookie', workerA).expect(200)).body;
+  const list = (await request(app).get('/api/tasks').set('Cookie', workerA).expect(200)).body.tasks;
   const seen1 = list.find((t) => t.task_id === t1);
   const seen2 = list.find((t) => t.task_id === t2);
   assert.equal(seen1.remaining_cents, 10_000 - seen1.consumed_cents);
@@ -153,12 +153,12 @@ test('rate edit does not affect open session; applies to next clock-in', async (
 
   await request(app).patch(`/api/employees/${aId}`).set('Cookie', admin).send({ hourly_rate_cents: 3000 }).expect(200);
   clock.advance(3_600_000);
-  let s = (await request(app).get('/api/tasks').set('Cookie', admin).expect(200)).body[0];
+  let s = (await request(app).get('/api/tasks').set('Cookie', admin).expect(200)).body.tasks[0];
   assert.equal(s.burn_rate_cents_per_hour, 2000); // snapshot rate unchanged
   assert.equal(s.consumed_cents, 2000);
 
   await request(app).post(`/api/tasks/${t}/clock-out`).set('Cookie', admin).send({ employee_id: aId }).expect(200);
   await request(app).post(`/api/tasks/${t}/clock-in`).set('Cookie', admin).send({ employee_id: aId }).expect(201);
-  s = (await request(app).get('/api/tasks').set('Cookie', admin).expect(200)).body[0];
+  s = (await request(app).get('/api/tasks').set('Cookie', admin).expect(200)).body.tasks[0];
   assert.equal(s.burn_rate_cents_per_hour, 3000); // new rate now applies
 });

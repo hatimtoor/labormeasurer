@@ -3,8 +3,9 @@
 const crypto = require('crypto');
 
 // Password hashing: scrypt (built-in, no native deps beyond better-sqlite3).
-// Cookie: stateless HMAC-signed "id.expiry.sig" so server restarts keep users
-// logged in and no session table is needed.
+// Sessions: server-side rows in auth_sessions — the cookie carries a random
+// token whose SHA-256 hash is stored, so a database leak exposes no usable
+// tokens, and logout / password change revoke sessions instantly.
 
 const COOKIE_NAME = 'lm_session';
 const SESSION_TTL_MS = 7 * 24 * 3_600_000;
@@ -30,34 +31,8 @@ function burnScrypt(password) {
   crypto.scryptSync(String(password ?? ''), 'timing-equalizer-salt', 32);
 }
 
-async function getSecret(data) {
-  const existing = await data.getSetting('cookie_secret');
-  if (existing) return existing;
-  const secret = crypto.randomBytes(32).toString('hex');
-  await data.setSetting('cookie_secret', secret);
-  return (await data.getSetting('cookie_secret')) || secret;
-}
-
-function sign(payload, secret) {
-  return crypto.createHmac('sha256', secret).update(payload).digest('hex');
-}
-
-function makeCookie(employeeId, secret) {
-  const payload = `${employeeId}.${Date.now() + SESSION_TTL_MS}`;
-  return `${payload}.${sign(payload, secret)}`;
-}
-
-function parseCookie(raw, secret) {
-  if (!raw) return null;
-  const parts = raw.split('.');
-  if (parts.length !== 3) return null;
-  const payload = `${parts[0]}.${parts[1]}`;
-  const expected = sign(payload, secret);
-  const given = parts[2];
-  if (expected.length !== given.length) return null;
-  if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(given))) return null;
-  if (Number(parts[1]) < Date.now()) return null;
-  return Number(parts[0]);
+function hashToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
 }
 
 function readCookies(req) {
@@ -71,34 +46,37 @@ function readCookies(req) {
   return out;
 }
 
-// middleware factory: attaches req.user (employee row) when the cookie is valid
 async function createAuth(data) {
-  const secret = await getSecret(data);
+  // Short-lived cache: against a REST backend every request would otherwise
+  // cost network round-trips to resolve the cookie. 5s bounds how stale a
+  // revocation can be — an acceptable trade for interactive latency.
+  const CACHE_TTL_MS = 5000;
+  const sessionCache = new Map(); // tokenHash -> {user, at}
 
-  // Short-lived user cache: against a REST backend every request would
-  // otherwise cost a network round-trip just to resolve the cookie. 5s is
-  // short enough that rate/name edits propagate almost immediately.
-  const USER_CACHE_TTL_MS = 5000;
-  const userCache = new Map(); // id -> {user, at}
-
-  async function resolveUser(id) {
-    const hit = userCache.get(id);
-    if (hit && Date.now() - hit.at < USER_CACHE_TTL_MS) return hit.user;
-    const user = (await data.getEmployee(id)) || null;
-    userCache.set(id, { user, at: Date.now() });
-    if (userCache.size > 5000) userCache.clear();
+  async function resolveSession(tokenHash) {
+    const hit = sessionCache.get(tokenHash);
+    if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.user;
+    let user = null;
+    const session = await data.getAuthSession(tokenHash);
+    if (session && !session.revoked && Number(session.expires_ms) > Date.now()) {
+      user = (await data.getEmployee(session.employee_id)) || null;
+    }
+    sessionCache.set(tokenHash, { user, at: Date.now() });
+    if (sessionCache.size > 5000) sessionCache.clear();
     return user;
   }
 
   function attachUser(req, _res, next) {
-    const id = parseCookie(readCookies(req)[COOKIE_NAME], secret);
-    if (id == null) {
+    const token = readCookies(req)[COOKIE_NAME];
+    if (!token) {
       req.user = null;
       return next();
     }
-    resolveUser(id)
+    const tokenHash = hashToken(token);
+    resolveSession(tokenHash)
       .then((user) => {
         req.user = user;
+        req.sessionTokenHash = tokenHash;
         next();
       })
       .catch(next);
@@ -117,18 +95,35 @@ async function createAuth(data) {
 
   const secureFlag = process.env.NODE_ENV === 'production' ? '; Secure' : '';
 
-  function setLoginCookie(res, employeeId) {
+  async function issueSession(res, employeeId) {
+    const token = crypto.randomBytes(32).toString('hex');
+    await data.createAuthSession({
+      token_hash: hashToken(token),
+      employee_id: employeeId,
+      created_ms: Date.now(),
+      expires_ms: Date.now() + SESSION_TTL_MS,
+    });
     res.setHeader(
       'Set-Cookie',
-      `${COOKIE_NAME}=${makeCookie(employeeId, secret)}; HttpOnly; Path=/; SameSite=Lax${secureFlag}; Max-Age=${SESSION_TTL_MS / 1000}`
+      `${COOKIE_NAME}=${token}; HttpOnly; Path=/; SameSite=Lax${secureFlag}; Max-Age=${SESSION_TTL_MS / 1000}`
     );
   }
 
-  function clearLoginCookie(res) {
-    res.setHeader('Set-Cookie', `${COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`);
+  async function revokeCurrentSession(req, res) {
+    if (req.sessionTokenHash) {
+      await data.revokeAuthSession(req.sessionTokenHash);
+      sessionCache.delete(req.sessionTokenHash);
+    }
+    res.setHeader('Set-Cookie', `${COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Lax${secureFlag}; Max-Age=0`);
   }
 
-  return { attachUser, requireAuth, requireAdmin, setLoginCookie, clearLoginCookie };
+  // password change / employee delete: kill every session for that user
+  async function revokeAllFor(employeeId) {
+    await data.revokeAllAuthSessionsFor(employeeId);
+    sessionCache.clear();
+  }
+
+  return { attachUser, requireAuth, requireAdmin, issueSession, revokeCurrentSession, revokeAllFor };
 }
 
 module.exports = { createAuth, hashPassword, verifyPassword, burnScrypt, COOKIE_NAME };

@@ -13,7 +13,7 @@ function parseRateCents(value) {
   return Math.round(n);
 }
 
-module.exports = function employeeRoutes({ data, auth, broadcast }) {
+module.exports = function employeeRoutes({ data, auth, audit, broadcast }) {
   const router = express.Router();
 
   router.get('/', auth.requireAdmin, async (_req, res, next) => {
@@ -42,6 +42,7 @@ module.exports = function employeeRoutes({ data, auth, broadcast }) {
         hourly_rate_cents: rate,
         is_admin: is_admin ? 1 : 0,
       });
+      audit(req, 'employee.create', 'employee', id, { name: String(name), hourly_rate_cents: rate });
       broadcast();
       res.status(201).json({ id });
     } catch (err) {
@@ -56,21 +57,32 @@ module.exports = function employeeRoutes({ data, auth, broadcast }) {
       if (!emp) return res.status(404).json({ error: 'no such employee' });
       const { name, hourly_rate_cents, password } = req.body || {};
       const fields = {};
-      if (name != null) fields.name = String(name);
+      const changes = {};
+      if (name != null) {
+        fields.name = String(name);
+        changes.name = { from: emp.name, to: fields.name };
+      }
       if (hourly_rate_cents != null) {
         const rate = parseRateCents(hourly_rate_cents);
         if (rate == null) return res.status(400).json({ error: 'invalid hourly_rate_cents' });
         // NOTE: open sessions keep their rate snapshot; new rate applies to future clock-ins
         fields.hourly_rate_cents = rate;
+        changes.hourly_rate_cents = { from: emp.hourly_rate_cents, to: rate };
       }
       if (password != null) {
         if (String(password).length < MIN_PASSWORD_LENGTH) {
           return res.status(400).json({ error: `password must be at least ${MIN_PASSWORD_LENGTH} characters` });
         }
         fields.password_hash = hashPassword(String(password));
+        changes.password = 'changed';
       }
       if (!Object.keys(fields).length) return res.status(400).json({ error: 'nothing to update' });
       await data.updateEmployee(emp.id, fields);
+      if (fields.password_hash) {
+        // a password change invalidates every existing login for that user
+        await auth.revokeAllFor(emp.id);
+      }
+      audit(req, 'employee.update', 'employee', emp.id, changes);
       broadcast();
       res.json({ ok: true });
     } catch (err) {
@@ -91,6 +103,7 @@ module.exports = function employeeRoutes({ data, auth, broadcast }) {
         return res.status(409).json({ error: 'employee has recorded hours — cannot delete' });
       }
       await data.deleteEmployee(id);
+      audit(req, 'employee.delete', 'employee', id, { name: emp.name });
       broadcast();
       res.json({ ok: true });
     } catch (err) {

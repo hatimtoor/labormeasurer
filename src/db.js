@@ -14,6 +14,12 @@ const Database = require('better-sqlite3');
 // completion inside one macrotask and no other request can interleave.
 
 const SQLITE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS projects (
+  id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  name   TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived'))
+);
+
 CREATE TABLE IF NOT EXISTS employees (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   name          TEXT NOT NULL,
@@ -28,7 +34,10 @@ CREATE TABLE IF NOT EXISTS tasks (
   name          TEXT NOT NULL,
   budget_cents  INTEGER NOT NULL CHECK (budget_cents >= 0),
   status        TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
-  show_countdown_to_employees INTEGER NOT NULL DEFAULT 1
+  show_countdown_to_employees INTEGER NOT NULL DEFAULT 1,
+  project_id    INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  budget_mode   TEXT NOT NULL DEFAULT 'money' CHECK (budget_mode IN ('money', 'hours')),
+  budget_hours_ms INTEGER NOT NULL DEFAULT 0 CHECK (budget_hours_ms >= 0)
 );
 
 CREATE TABLE IF NOT EXISTS assignments (
@@ -42,20 +51,59 @@ CREATE TABLE IF NOT EXISTS sessions (
   task_id      INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   employee_id  INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
   rate_cents_snapshot INTEGER NOT NULL,
+  burdened_rate_cents_snapshot INTEGER,
   clock_in_ms  INTEGER NOT NULL,
-  clock_out_ms INTEGER CHECK (clock_out_ms IS NULL OR clock_out_ms >= clock_in_ms)
+  clock_out_ms INTEGER CHECK (clock_out_ms IS NULL OR clock_out_ms >= clock_in_ms),
+  voided       INTEGER NOT NULL DEFAULT 0,
+  corrected_from INTEGER,
+  note         TEXT,
+  created_by   INTEGER
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_open_session
-  ON sessions(employee_id) WHERE clock_out_ms IS NULL;
+  ON sessions(employee_id) WHERE clock_out_ms IS NULL AND voided = 0;
 
 CREATE INDEX IF NOT EXISTS ix_sessions_task ON sessions(task_id);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_hash  TEXT NOT NULL UNIQUE,
+  employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  created_ms  INTEGER NOT NULL,
+  expires_ms  INTEGER NOT NULL,
+  revoked     INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  at_ms     INTEGER NOT NULL,
+  actor_id  INTEGER,
+  action    TEXT NOT NULL,
+  entity    TEXT NOT NULL,
+  entity_id INTEGER,
+  details   TEXT
+);
 
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
 `;
+
+// column additions for databases created before schema v2. The v1 unique index
+// must also be swapped for the voided-aware one.
+const SQLITE_MIGRATIONS = [
+  "ALTER TABLE tasks ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL",
+  "ALTER TABLE tasks ADD COLUMN budget_mode TEXT NOT NULL DEFAULT 'money'",
+  'ALTER TABLE tasks ADD COLUMN budget_hours_ms INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE sessions ADD COLUMN burdened_rate_cents_snapshot INTEGER',
+  'ALTER TABLE sessions ADD COLUMN voided INTEGER NOT NULL DEFAULT 0',
+  'ALTER TABLE sessions ADD COLUMN corrected_from INTEGER',
+  'ALTER TABLE sessions ADD COLUMN note TEXT',
+  'ALTER TABLE sessions ADD COLUMN created_by INTEGER',
+  'DROP INDEX IF EXISTS ux_open_session',
+  'CREATE UNIQUE INDEX IF NOT EXISTS ux_open_session ON sessions(employee_id) WHERE clock_out_ms IS NULL AND voided = 0',
+];
 
 function isUniqueViolation(err) {
   return err && (err.code === '23505' || /UNIQUE/i.test(String(err.message)));
@@ -66,6 +114,13 @@ function createSqliteAdapter(file = 'labormeasurer.db') {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.exec(SQLITE_SCHEMA);
+  for (const migration of SQLITE_MIGRATIONS) {
+    try {
+      db.exec(migration);
+    } catch (err) {
+      if (!/duplicate column/i.test(String(err.message))) throw err;
+    }
+  }
 
   const adapter = {
     kind: 'sqlite',

@@ -42,12 +42,12 @@ test('unassigning a clocked-in worker closes their session (no phantom burn, not
     .send({ employee_ids: [bId] })
     .expect(200);
 
-  let snap = (await request(app).get('/api/tasks').set('Cookie', admin).expect(200)).body[0];
+  let snap = (await request(app).get('/api/tasks').set('Cookie', admin).expect(200)).body.tasks[0];
   assert.equal(snap.burn_rate_cents_per_hour, 0); // session was closed
   assert.equal(snap.consumed_cents, 2000); // 1h at $20 kept, then stopped
 
   clock.advance(HOUR_MS);
-  snap = (await request(app).get('/api/tasks').set('Cookie', admin).expect(200)).body[0];
+  snap = (await request(app).get('/api/tasks').set('Cookie', admin).expect(200)).body.tasks[0];
   assert.equal(snap.consumed_cents, 2000); // no phantom burn after removal
 
   // A is free to clock into another task
@@ -76,7 +76,7 @@ test('employees never see co-worker rates or costs, even with countdown visible'
   await request(app).post(`/api/tasks/${taskId}/clock-in`).set('Cookie', workerB).expect(201);
   clock.advance(HOUR_MS);
 
-  const seenByA = (await request(app).get('/api/tasks').set('Cookie', workerA).expect(200)).body[0];
+  const seenByA = (await request(app).get('/api/tasks').set('Cookie', workerA).expect(200)).body.tasks[0];
   // countdown + aggregates are visible (show_countdown_to_employees defaults on)
   assert.ok(seenByA.remaining_seconds > 0);
   assert.equal(seenByA.burn_rate_cents_per_hour, 4500);
@@ -100,7 +100,7 @@ test('POST and PATCH agree on show_countdown_to_employees truthiness', async () 
     .set('Cookie', ctx.admin)
     .send({ name: 'Hidden', budget_cents: 1000, show_countdown_to_employees: 0 });
   assert.equal(created.status, 201);
-  const snaps = (await request(ctx.app).get('/api/tasks').set('Cookie', ctx.admin).expect(200)).body;
+  const snaps = (await request(ctx.app).get('/api/tasks').set('Cookie', ctx.admin).expect(200)).body.tasks;
   const hidden = snaps.find((t) => t.task_id === created.body.id);
   assert.equal(hidden.show_countdown_to_employees, false); // 0 now means hidden on POST too
 });
@@ -140,7 +140,7 @@ test('zero-rate worker: clocked in, burn 0, countdown paused-null, budget untouc
   const workerV = await login(request, ctx.app, 'v');
   await request(ctx.app).post(`/api/tasks/${ctx.taskId}/clock-in`).set('Cookie', workerV).expect(201);
   ctx.clock.advance(HOUR_MS);
-  const snap = (await request(ctx.app).get('/api/tasks').set('Cookie', ctx.admin).expect(200)).body[0];
+  const snap = (await request(ctx.app).get('/api/tasks').set('Cookie', ctx.admin).expect(200)).body.tasks[0];
   assert.equal(snap.burn_rate_cents_per_hour, 0);
   assert.equal(snap.remaining_seconds, null);
   assert.equal(snap.consumed_cents, 0);

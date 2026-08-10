@@ -3,7 +3,7 @@
 const express = require('express');
 const { isUniqueViolation } = require('../db');
 
-module.exports = function clockRoutes({ data, auth, clock, broadcast }) {
+module.exports = function clockRoutes({ data, auth, clock, org, audit, broadcast }) {
   const router = express.Router();
 
   // Determines who is being clocked in/out and validates permission for it.
@@ -55,7 +55,10 @@ module.exports = function clockRoutes({ data, auth, clock, broadcast }) {
           task_id: task.id,
           employee_id: employee.id,
           rate_cents_snapshot: employee.hourly_rate_cents,
+          // true labor cost: wage × org burden multiplier, frozen at clock-in
+          burdened_rate_cents_snapshot: await org.burdenedRate(employee.hourly_rate_cents),
           clock_in_ms: clock.now(),
+          created_by: req.user.id,
         });
       } catch (err) {
         // ux_open_session partial unique index — lost a race with a concurrent clock-in
@@ -63,6 +66,9 @@ module.exports = function clockRoutes({ data, auth, clock, broadcast }) {
           return res.status(409).json({ error: 'already clocked in' });
         }
         throw err;
+      }
+      if (employee.id !== req.user.id) {
+        audit(req, 'clock.in_for', 'employee', employee.id, { task_id: task.id });
       }
       broadcast();
       res.status(201).json({ ok: true, session_id: sessionId });
@@ -90,6 +96,9 @@ module.exports = function clockRoutes({ data, auth, clock, broadcast }) {
       }
       // clamp so an NTP step backwards can never violate clock_out >= clock_in
       await data.closeSession(open.id, Math.max(clock.now(), open.clock_in_ms));
+      if (employee.id !== req.user.id) {
+        audit(req, 'clock.out_for', 'employee', employee.id, { task_id: task.id });
+      }
       broadcast();
       res.json({ ok: true, session_id: open.id });
     } catch (err) {

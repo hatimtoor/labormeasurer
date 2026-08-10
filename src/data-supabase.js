@@ -29,7 +29,13 @@ function createSupabaseData(projectUrl, serviceRoleKey) {
     const all = [];
     for (let from = 0; ; from += PAGE) {
       const rows = unwrap(
-        await sb.from('sessions').select('*').order('clock_in_ms').order('id').range(from, from + PAGE - 1)
+        await sb
+          .from('sessions')
+          .select('*')
+          .eq('voided', 0)
+          .order('clock_in_ms')
+          .order('id')
+          .range(from, from + PAGE - 1)
       );
       all.push(...rows);
       if (rows.length < PAGE) return all;
@@ -48,7 +54,7 @@ function createSupabaseData(projectUrl, serviceRoleKey) {
     },
     async updateTask(id, fields) {
       const clean = {};
-      for (const key of ['name', 'budget_cents', 'status', 'show_countdown_to_employees']) {
+      for (const key of ['name', 'budget_cents', 'status', 'show_countdown_to_employees', 'budget_hours_ms', 'project_id']) {
         if (fields[key] !== undefined) clean[key] = fields[key];
       }
       if (Object.keys(clean).length) unwrap(await sb.from('tasks').update(clean).eq('id', id));
@@ -91,6 +97,21 @@ function createSupabaseData(projectUrl, serviceRoleKey) {
         await sb.from('assignments').select('task_id').eq('task_id', taskId).eq('employee_id', employeeId).maybeSingle()
       ),
     async replaceAssignments(taskId, employeeIds, nowMs) {
+      // Preferred: atomic Postgres function (created by the schema migration).
+      // Falls back to the best-effort REST sequence when the function is absent.
+      const rpc = await sb.rpc('lm_replace_assignments', {
+        p_task_id: taskId,
+        p_employee_ids: employeeIds,
+        p_now_ms: nowMs,
+      });
+      if (!rpc.error) return;
+      const missing = rpc.error.code === '42883' || rpc.error.code === 'PGRST202';
+      if (!missing) {
+        const err = new Error(rpc.error.message);
+        err.code = rpc.error.code;
+        throw err;
+      }
+
       // best-effort sequence (PostgREST has no multi-statement transactions);
       // order matters: close removed workers' sessions BEFORE touching rows.
       // Bulk close in one call; fall back to per-row clamped closes only if
@@ -99,7 +120,8 @@ function createSupabaseData(projectUrl, serviceRoleKey) {
         .from('sessions')
         .update({ clock_out_ms: nowMs })
         .eq('task_id', taskId)
-        .is('clock_out_ms', null);
+        .is('clock_out_ms', null)
+        .eq('voided', 0);
       try {
         // session-close and assignment-delete touch different tables — parallel
         const [closed, deleted] = await Promise.all([
@@ -120,7 +142,12 @@ function createSupabaseData(projectUrl, serviceRoleKey) {
         // else (outage, auth, timeout) must propagate
         if (err.code !== '23514' && !/check constraint/i.test(String(err.message))) throw err;
         const open = unwrap(
-          await sb.from('sessions').select('id, employee_id, clock_in_ms').eq('task_id', taskId).is('clock_out_ms', null)
+          await sb
+            .from('sessions')
+            .select('id, employee_id, clock_in_ms')
+            .eq('task_id', taskId)
+            .is('clock_out_ms', null)
+            .eq('voided', 0)
         );
         const keep = new Set(employeeIds);
         for (const s of open) {
@@ -139,20 +166,99 @@ function createSupabaseData(projectUrl, serviceRoleKey) {
 
     // --- sessions ---
     getOpenSession: async (employeeId) =>
-      unwrap(await sb.from('sessions').select('*').eq('employee_id', employeeId).is('clock_out_ms', null).maybeSingle()) ||
-      undefined,
-    insertSession: async (row) => unwrap(await sb.from('sessions').insert(row).select('id').single()).id,
+      unwrap(
+        await sb
+          .from('sessions')
+          .select('*')
+          .eq('employee_id', employeeId)
+          .is('clock_out_ms', null)
+          .eq('voided', 0)
+          .maybeSingle()
+      ) || undefined,
+    getSession: async (id) => unwrap(await sb.from('sessions').select('*').eq('id', id).maybeSingle()) || undefined,
+    getTaskSessions: async (taskId) =>
+      unwrap(
+        await sb
+          .from('sessions')
+          .select('*')
+          .eq('task_id', taskId)
+          .order('clock_in_ms', { ascending: false })
+          .order('id', { ascending: false })
+          .limit(200)
+      ),
+    insertSession: async (s) =>
+      unwrap(
+        await sb
+          .from('sessions')
+          .insert({
+            task_id: s.task_id,
+            employee_id: s.employee_id,
+            rate_cents_snapshot: s.rate_cents_snapshot,
+            burdened_rate_cents_snapshot: s.burdened_rate_cents_snapshot ?? s.rate_cents_snapshot,
+            clock_in_ms: s.clock_in_ms,
+            clock_out_ms: s.clock_out_ms ?? null,
+            corrected_from: s.corrected_from ?? null,
+            note: s.note ?? null,
+            created_by: s.created_by ?? null,
+          })
+          .select('id')
+          .single()
+      ).id,
     closeSession: async (id, outMs) => {
       unwrap(await sb.from('sessions').update({ clock_out_ms: outMs }).eq('id', id));
+    },
+    voidSession: async (id) => {
+      unwrap(await sb.from('sessions').update({ voided: 1 }).eq('id', id));
+    },
+
+    // --- auth sessions ---
+    createAuthSession: async (s) => {
+      unwrap(await sb.from('auth_sessions').insert(s));
+    },
+    getAuthSession: async (tokenHash) =>
+      unwrap(await sb.from('auth_sessions').select('*').eq('token_hash', tokenHash).maybeSingle()) || undefined,
+    revokeAuthSession: async (tokenHash) => {
+      unwrap(await sb.from('auth_sessions').update({ revoked: 1 }).eq('token_hash', tokenHash));
+    },
+    revokeAllAuthSessionsFor: async (employeeId) => {
+      unwrap(await sb.from('auth_sessions').update({ revoked: 1 }).eq('employee_id', employeeId));
+    },
+
+    // --- audit ---
+    insertAudit: async (a) => {
+      unwrap(await sb.from('audit_log').insert(a));
+    },
+    getAuditLog: async (limit = 100) =>
+      unwrap(await sb.from('audit_log').select('*').order('id', { ascending: false }).limit(limit)),
+
+    // --- projects ---
+    getProjects: async () => unwrap(await sb.from('projects').select('*').order('name')),
+    getProject: async (id) => unwrap(await sb.from('projects').select('*').eq('id', id).maybeSingle()) || undefined,
+    insertProject: async (row) => unwrap(await sb.from('projects').insert(row).select('id').single()).id,
+    async updateProject(id, fields) {
+      const clean = {};
+      for (const key of ['name', 'status']) {
+        if (fields[key] !== undefined) clean[key] = fields[key];
+      }
+      if (Object.keys(clean).length) unwrap(await sb.from('projects').update(clean).eq('id', id));
+    },
+    deleteProject: async (id) => {
+      unwrap(await sb.from('projects').delete().eq('id', id));
+    },
+
+    getAllSettings: async () => {
+      const rows = unwrap(await sb.from('settings').select('key, value'));
+      return Object.fromEntries(rows.map((r) => [r.key, r.value]));
     },
 
     // --- snapshot bundle ---
     async getSnapshotBundle() {
-      const [tasks, sessions, assignmentRows, employeeNames] = await Promise.all([
+      const [tasks, sessions, assignmentRows, employeeNames, projects] = await Promise.all([
         sb.from('tasks').select('*').order('id').then(unwrap),
         fetchAllSessions(),
         sb.from('assignments').select('task_id, employees(id, name, hourly_rate_cents)').then(unwrap),
         sb.from('employees').select('id, name').then(unwrap),
+        sb.from('projects').select('*').order('name').then(unwrap),
       ]);
       const assignments = assignmentRows
         .map((r) => ({
@@ -162,7 +268,7 @@ function createSupabaseData(projectUrl, serviceRoleKey) {
           hourly_rate_cents: r.employees.hourly_rate_cents,
         }))
         .sort((a, b) => a.name.localeCompare(b.name));
-      return { tasks, sessions, assignments, employeeNames };
+      return { tasks, sessions, assignments, employeeNames, projects };
     },
 
     // --- settings ---
@@ -175,9 +281,12 @@ function createSupabaseData(projectUrl, serviceRoleKey) {
     // --- maintenance ---
     async wipeAll() {
       // PostgREST requires a filter on DELETE; match-all via always-true bounds
+      unwrap(await sb.from('audit_log').delete().gte('id', 0));
+      unwrap(await sb.from('auth_sessions').delete().gte('id', 0));
       unwrap(await sb.from('sessions').delete().gte('id', 0));
       unwrap(await sb.from('assignments').delete().gte('task_id', 0)); // composite PK, no id column
       unwrap(await sb.from('tasks').delete().gte('id', 0));
+      unwrap(await sb.from('projects').delete().gte('id', 0));
       unwrap(await sb.from('employees').delete().gte('id', 0));
       unwrap(await sb.from('settings').delete().neq('key', ''));
     },

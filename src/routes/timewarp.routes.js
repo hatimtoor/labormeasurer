@@ -4,7 +4,7 @@ const express = require('express');
 
 // Demo-only control: advance the domain clock so budget consumption that
 // would take hours can be shown in seconds. Advance-only — time never goes back.
-module.exports = function timewarpRoutes({ auth, clock, broadcast }) {
+module.exports = function timewarpRoutes({ auth, clock, audit, broadcast }) {
   const router = express.Router();
 
   router.get('/', auth.requireAdmin, (_req, res) => {
@@ -19,6 +19,7 @@ module.exports = function timewarpRoutes({ auth, clock, broadcast }) {
         return res.status(400).json({ error: 'advance_ms must be an integer between 0 and one year' });
       }
       await clock.advance(advance);
+      audit(req, 'timewarp.advance', 'clock', null, { advance_ms: advance, offset_ms: clock.offsetMs() });
       broadcast();
       res.json({ offset_ms: clock.offsetMs(), now_ms: clock.now() });
     } catch (err) {
