@@ -232,7 +232,7 @@ function renderProjectStrip() {
 
   for (const p of projects) {
     const chip = document.createElement('button');
-    chip.className = `chip${projectFilter === p.id ? ' active' : ''}`;
+    chip.className = `chip c${p.id % 6}${projectFilter === p.id ? ' active' : ''}`;
     const countdown =
       p.remaining_seconds != null ? ` · ${LM.fmtClock(p.remaining_seconds)} left` : '';
     chip.innerHTML = `${esc(p.name)} <span class="chip-sub">${LM.fmtMoney(p.consumed_cents)} / ${LM.fmtMoney(p.budget_cents)}${countdown}</span>`;
@@ -312,7 +312,7 @@ function updateCard(card, taskId) {
   card.innerHTML = `
     <div class="card-head">
       <h3>${esc(s.name)}</h3>
-      ${project ? `<span class="badge proj">${esc(project.name)}</span>` : ''}
+      ${project ? `<span class="badge proj c${project.id % 6}">${esc(project.name)}</span>` : ''}
       ${hoursMode ? '<span class="badge">hours budget</span>' : ''}
       ${s.status === 'archived' ? '<span class="badge">archived</span>' : ''}
       ${!s.show_countdown_to_employees ? '<span class="badge">hidden from crew</span>' : ''}
