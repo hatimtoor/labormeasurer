@@ -6,6 +6,7 @@
 let me = null;
 let employees = []; // admin only
 let eventSource = null;
+let selectedTaskId = null; // clicked card highlight
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -54,6 +55,7 @@ async function boot() {
 function enterApp() {
   $('#whoami').textContent = `${me.name}${me.is_admin ? ' (admin)' : ''}`;
   $('#warp-controls').hidden = !me.is_admin;
+  $('#admin-tabs').hidden = !me.is_admin;
   show(me.is_admin ? 'admin-view' : 'employee-view');
   connectSse();
   refreshTasks();
@@ -139,9 +141,17 @@ function render() {
     if (!card) {
       card = document.createElement('div');
       card.dataset.task = id;
+      // click (outside any control) selects/deselects the card
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('button, input, label, details, summary, table')) return;
+        const cardId = Number(card.dataset.task);
+        selectedTaskId = selectedTaskId === cardId ? null : cardId;
+        render();
+      });
       container.appendChild(card);
     }
     updateCard(card, id);
+    card.classList.toggle('selected', id === selectedTaskId);
   }
   for (const card of [...container.querySelectorAll('[data-task]')]) {
     if (!ids.includes(Number(card.dataset.task))) card.remove();
@@ -272,8 +282,8 @@ function renderClockButtons(el, s) {
   if (me.is_admin) return; // admins use per-employee controls below
   const mine = s.redacted ? s.clocked_in : (s.active_employee_ids || []).includes(me.id);
   const btn = document.createElement('button');
-  btn.className = `btn big ${mine ? 'danger' : 'primary'}`;
-  btn.textContent = mine ? 'Clock OUT' : 'Clock IN';
+  btn.className = `btn big ${mine ? 'toggle-on' : 'primary'}`;
+  btn.textContent = mine ? '● On the clock — press to clock OUT' : 'Clock IN';
   btn.onclick = async () => {
     try {
       await api(`/api/tasks/${s.task_id}/clock-${mine ? 'out' : 'in'}`, { method: 'POST' });
@@ -296,7 +306,7 @@ function renderAdminControls(s) {
         <label class="check"><input type="checkbox" data-assign="${e.id}" ${assigned.has(e.id) ? 'checked' : ''}/> ${esc(e.name)} <span class="muted">(${LM.fmtMoney(e.hourly_rate_cents)}/hr)</span></label>
         ${
           assigned.has(e.id)
-            ? `<button class="btn small ${active ? 'danger' : ''}" data-clock="${e.id}" data-dir="${active ? 'out' : 'in'}">${active ? 'Clock out' : 'Clock in'}</button>`
+            ? `<button class="btn small ${active ? 'toggle-on' : ''}" data-clock="${e.id}" data-dir="${active ? 'out' : 'in'}">${active ? '● On clock — out' : 'Clock in'}</button>`
             : ''
         }
       </div>`;
@@ -477,6 +487,16 @@ document.querySelectorAll('[data-warp]').forEach((btn) => {
     } catch (err) {
       toast(err.message, true);
     }
+  });
+});
+
+// admin tab switching — active tab gets the filled accent state
+document.querySelectorAll('#admin-tabs .tab').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#admin-tabs .tab').forEach((b) => b.classList.toggle('active', b === btn));
+    document.querySelectorAll('.tab-body').forEach((s) => {
+      s.hidden = s.id !== `tab-${btn.dataset.tab}`;
+    });
   });
 });
 

@@ -9,15 +9,13 @@
 <body>
   <div id="app">
     <header id="topbar" hidden>
-      <div class="brand">⏳ <strong>LaborMeasurer</strong> <span class="tagline">labor budget countdown</span></div>
+      <div class="brand">⏳ <strong>LaborMeasurer</strong></div>
+      <nav id="admin-tabs" hidden>
+        <button class="tab active" data-tab="tasks">Tasks</button>
+        <button class="tab" data-tab="employees">Employees</button>
+        <button class="tab" data-tab="settings">Settings</button>
+      </nav>
       <div class="topbar-right">
-        <span id="warp-controls" hidden>
-          <span class="muted small">🕐 Time-warp:</span>
-          <button class="btn small" data-warp="600000">+10m</button>
-          <button class="btn small" data-warp="3600000">+1h</button>
-          <button class="btn small" data-warp="18000000">+5h</button>
-          <button class="btn small" data-warp="36000000">+10h</button>
-        </span>
         <span id="whoami"></span>
         <button id="logout-btn" class="btn ghost">Log out</button>
       </div>
@@ -29,9 +27,10 @@
         <h1>⏳ LaborMeasurer</h1>
         <p class="muted">Countdown labor budget tracking</p>
         <form id="login-form">
-          <input id="login-username" placeholder="Username" autocomplete="username" required />
-          <input id="login-password" type="password" placeholder="Password" autocomplete="current-password" required />
+          <input id="login-username" placeholder="Username" aria-label="Username" autocomplete="username" autofocus required />
+          <input id="login-password" type="password" placeholder="Password" aria-label="Password" autocomplete="current-password" required />
           <button class="btn primary" type="submit">Log in</button>
+          <p class="hint muted small">Press Enter to sign in</p>
           <p id="login-error" class="error" hidden></p>
         </form>
       </div>
@@ -39,33 +38,47 @@
 
     <!-- ADMIN -->
     <section id="admin-view" hidden>
-      <div class="admin-grid">
+      <div class="tab-body" id="tab-tasks">
+        <div class="toolbar">
+          <h2>Tasks</h2>
+          <form id="new-task-form" class="inline-create">
+            <input id="task-name" placeholder="New task name" aria-label="Task name" required />
+            <input id="task-budget" type="number" min="0" step="0.01" placeholder="Budget ($)" aria-label="Labor budget in dollars" required />
+            <label class="check"><input type="checkbox" id="task-show-countdown" checked /> Crew sees countdown</label>
+            <button class="btn primary" type="submit">+ Create task</button>
+          </form>
+        </div>
         <div id="task-cards" class="task-cards"></div>
-        <aside class="sidebar">
-          <div class="panel">
-            <h2>New Task</h2>
-            <form id="new-task-form">
-              <input id="task-name" placeholder="Task name (e.g. Frame Unit 101)" aria-label="Task name" required />
-              <input id="task-budget" type="number" min="0" step="0.01" placeholder="Labor budget ($)" aria-label="Labor budget in dollars" required />
-              <label class="check"><input type="checkbox" id="task-show-countdown" checked /> Employees can see countdown</label>
-              <button class="btn primary" type="submit">Create task</button>
-            </form>
+      </div>
+
+      <div class="tab-body" id="tab-employees" hidden>
+        <div class="toolbar">
+          <h2>Employees</h2>
+          <form id="new-employee-form" class="inline-create">
+            <input id="emp-name" placeholder="Full name" aria-label="Full name" autocomplete="off" required />
+            <input id="emp-username" placeholder="Username" aria-label="Username" autocomplete="off" required />
+            <input id="emp-password" type="password" placeholder="Password (min 8)" aria-label="Password" autocomplete="new-password" minlength="8" required />
+            <input id="emp-rate" type="number" min="0" step="0.01" placeholder="Rate ($/hr)" aria-label="Hourly rate in dollars per hour" required />
+            <button class="btn primary" type="submit">+ Add employee</button>
+          </form>
+        </div>
+        <div class="panel">
+          <div id="employee-list"></div>
+        </div>
+      </div>
+
+      <div class="tab-body" id="tab-settings" hidden>
+        <div class="toolbar"><h2>Settings</h2></div>
+        <div class="panel">
+          <h3>🕐 Demo time-warp</h3>
+          <p class="muted small">Advance the domain clock to simulate hours of work in seconds. Advance-only — real clock-ins are unaffected. All dashboards update instantly.</p>
+          <div id="warp-controls" class="warp-row" hidden>
+            <button class="btn" data-warp="600000">+10 min</button>
+            <button class="btn" data-warp="3600000">+1 hour</button>
+            <button class="btn" data-warp="18000000">+5 hours</button>
+            <button class="btn" data-warp="36000000">+10 hours</button>
           </div>
-          <div class="panel">
-            <h2>New Employee</h2>
-            <form id="new-employee-form">
-              <input id="emp-name" placeholder="Full name" aria-label="Full name" autocomplete="off" required />
-              <input id="emp-username" placeholder="Username" aria-label="Username" autocomplete="off" required />
-              <input id="emp-password" type="password" placeholder="Password (min 8 chars)" aria-label="Password" autocomplete="new-password" minlength="8" required />
-              <input id="emp-rate" type="number" min="0" step="0.01" placeholder="Hourly rate ($/hr)" aria-label="Hourly rate in dollars per hour" required />
-              <button class="btn primary" type="submit">Create employee</button>
-            </form>
-          </div>
-          <div class="panel">
-            <h2>Employees</h2>
-            <div id="employee-list"></div>
-          </div>
-        </aside>
+        </div>
       </div>
     </section>
 
@@ -75,7 +88,6 @@
     </section>
   </div>
 
-  <template id="toast-tpl"><div class="toast"></div></template>
   <script src="countdown.js"></script>
   <script src="app.js"></script>
 </body>
