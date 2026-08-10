@@ -1,0 +1,19 @@
+{
+  "name": "labormeasurer",
+  "version": "1.0.0",
+  "description": "Countdown labor budget tracker — remaining time = remaining budget / current crew burn rate",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "seed": "node seed.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^11.5.0",
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "supertest": "^7.0.0"
+  }
+}

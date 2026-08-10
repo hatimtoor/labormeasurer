@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LaborMeasurer — Labor Budget Countdown</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="topbar" hidden>
+      <div class="brand">⏳ <strong>LaborMeasurer</strong> <span class="tagline">labor budget countdown</span></div>
+      <div class="topbar-right">
+        <span id="whoami"></span>
+        <button id="logout-btn" class="btn ghost">Log out</button>
+      </div>
+    </header>
+
+    <!-- LOGIN -->
+    <section id="login-view" hidden>
+      <div class="login-card">
+        <h1>⏳ LaborMeasurer</h1>
+        <p class="muted">Countdown labor budget tracking</p>
+        <form id="login-form">
+          <input id="login-username" placeholder="Username" autocomplete="username" required />
+          <input id="login-password" type="password" placeholder="Password" autocomplete="current-password" required />
+          <button class="btn primary" type="submit">Log in</button>
+          <p id="login-error" class="error" hidden></p>
+        </form>
+      </div>
+    </section>
+
+    <!-- ADMIN -->
+    <section id="admin-view" hidden>
+      <div class="admin-grid">
+        <div id="task-cards" class="task-cards"></div>
+        <aside class="sidebar">
+          <div class="panel">
+            <h2>New Task</h2>
+            <form id="new-task-form">
+              <input id="task-name" placeholder="Task name (e.g. Frame Unit 101)" required />
+              <input id="task-budget" type="number" min="0" step="0.01" placeholder="Labor budget ($)" required />
+              <label class="check"><input type="checkbox" id="task-show-countdown" checked /> Employees can see countdown</label>
+              <button class="btn primary" type="submit">Create task</button>
+            </form>
+          </div>
+          <div class="panel">
+            <h2>New Employee</h2>
+            <form id="new-employee-form">
+              <input id="emp-name" placeholder="Full name" required />
+              <input id="emp-username" placeholder="Username" required />
+              <input id="emp-password" type="password" placeholder="Password" required />
+              <input id="emp-rate" type="number" min="0" step="0.01" placeholder="Hourly rate ($/hr)" required />
+              <button class="btn primary" type="submit">Create employee</button>
+            </form>
+          </div>
+          <div class="panel">
+            <h2>Employees</h2>
+            <div id="employee-list"></div>
+          </div>
+          <div class="panel warp">
+            <h2>🕐 Demo Time-Warp</h2>
+            <p class="muted small">Advance the domain clock to simulate hours of work in seconds. Advance-only.</p>
+            <div class="warp-buttons">
+              <button class="btn" data-warp="600000">+10 min</button>
+              <button class="btn" data-warp="3600000">+1 h</button>
+              <button class="btn" data-warp="18000000">+5 h</button>
+              <button class="btn" data-warp="36000000">+10 h</button>
+            </div>
+            <p class="muted small" id="warp-status"></p>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- EMPLOYEE -->
+    <section id="employee-view" hidden>
+      <div id="employee-tasks" class="task-cards employee"></div>
+    </section>
+  </div>
+
+  <template id="toast-tpl"><div class="toast"></div></template>
+  <script src="countdown.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

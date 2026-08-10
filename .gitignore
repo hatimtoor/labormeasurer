@@ -1,0 +1,5 @@
+node_modules/
+labormeasurer.db
+labormeasurer.db-wal
+labormeasurer.db-shm
+*.log
