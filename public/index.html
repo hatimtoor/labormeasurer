@@ -11,6 +11,13 @@
     <header id="topbar" hidden>
       <div class="brand">⏳ <strong>LaborMeasurer</strong> <span class="tagline">labor budget countdown</span></div>
       <div class="topbar-right">
+        <span id="warp-controls" hidden>
+          <span class="muted small">🕐 Time-warp:</span>
+          <button class="btn small" data-warp="600000">+10m</button>
+          <button class="btn small" data-warp="3600000">+1h</button>
+          <button class="btn small" data-warp="18000000">+5h</button>
+          <button class="btn small" data-warp="36000000">+10h</button>
+        </span>
         <span id="whoami"></span>
         <button id="logout-btn" class="btn ghost">Log out</button>
       </div>
@@ -57,17 +64,6 @@
           <div class="panel">
             <h2>Employees</h2>
             <div id="employee-list"></div>
-          </div>
-          <div class="panel warp">
-            <h2>🕐 Demo Time-Warp</h2>
-            <p class="muted small">Advance the domain clock to simulate hours of work in seconds. Advance-only.</p>
-            <div class="warp-buttons">
-              <button class="btn" data-warp="600000">+10 min</button>
-              <button class="btn" data-warp="3600000">+1 h</button>
-              <button class="btn" data-warp="18000000">+5 h</button>
-              <button class="btn" data-warp="36000000">+10 h</button>
-            </div>
-            <p class="muted small" id="warp-status"></p>
           </div>
         </aside>
       </div>

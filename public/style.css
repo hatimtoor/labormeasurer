@@ -143,8 +143,8 @@ input:focus { outline: none; border-color: var(--accent); }
 .emp-rate { display: flex; align-items: center; gap: 0.3rem; }
 .emp-rate input { width: 84px; padding: 0.25rem 0.45rem; }
 
-.warp-buttons { display: flex; gap: 0.45rem; flex-wrap: wrap; }
-.panel.warp { border-style: dashed; }
+#warp-controls { display: inline-flex; gap: 0.35rem; align-items: center; margin-right: 0.6rem; }
+#warp-controls[hidden] { display: none !important; }
 
 .muted { color: var(--muted); }
 .small { font-size: 0.8rem; }

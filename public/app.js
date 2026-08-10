@@ -47,6 +47,7 @@ async function boot() {
 
 function enterApp() {
   $('#whoami').textContent = `${me.name}${me.is_admin ? ' (admin)' : ''}`;
+  $('#warp-controls').hidden = !me.is_admin;
   show(me.is_admin ? 'admin-view' : 'employee-view');
   connectSse();
   refreshTasks();
@@ -401,7 +402,7 @@ document.querySelectorAll('[data-warp]').forEach((btn) => {
   btn.addEventListener('click', async () => {
     try {
       const res = await api('/api/timewarp', { method: 'POST', body: { advance_ms: Number(btn.dataset.warp) } });
-      $('#warp-status').textContent = `Clock advanced ${(res.offset_ms / 3_600_000).toFixed(2)} h total`;
+      toast(`Clock advanced — ${(res.offset_ms / 3_600_000).toFixed(2)} h warped in total`);
     } catch (err) {
       toast(err.message, true);
     }
