@@ -17,7 +17,7 @@ function intParam(value) {
   return Number.isInteger(n) ? n : null;
 }
 
-module.exports = function taskRoutes({ db, store, auth, clock, broadcast }) {
+module.exports = function taskRoutes({ data, store, auth, clock, broadcast }) {
   const router = express.Router();
 
   // role-filtered list with embedded snapshots (initial paint before SSE connects)
@@ -43,12 +43,13 @@ module.exports = function taskRoutes({ db, store, auth, clock, broadcast }) {
       }
       // same truthiness rule as PATCH; omitted field defaults to visible
       const show = show_countdown_to_employees === undefined ? 1 : show_countdown_to_employees ? 1 : 0;
-      const row = await db.get(
-        'INSERT INTO tasks (name, budget_cents, show_countdown_to_employees) VALUES (?, ?, ?) RETURNING id',
-        [String(name), budget, show]
-      );
+      const id = await data.insertTask({
+        name: String(name),
+        budget_cents: budget,
+        show_countdown_to_employees: show,
+      });
       broadcast();
-      res.status(201).json({ id: row.id });
+      res.status(201).json({ id });
     } catch (err) {
       next(err);
     }
@@ -58,26 +59,25 @@ module.exports = function taskRoutes({ db, store, auth, clock, broadcast }) {
     try {
       const taskId = intParam(req.params.id);
       if (taskId == null) return res.status(400).json({ error: 'invalid task id' });
-      const task = await store.q.task(taskId);
+      const task = await data.getTask(taskId);
       if (!task) return res.status(404).json({ error: 'no such task' });
       const { name, budget_cents, status, show_countdown_to_employees } = req.body || {};
-      const updates = [];
-      const params = [];
-      if (name != null) { updates.push('name = ?'); params.push(String(name)); }
+      const fields = {};
+      if (name != null) fields.name = String(name);
       if (budget_cents != null) {
         const budget = parseBudgetCents(budget_cents);
         if (budget == null) return res.status(400).json({ error: 'invalid budget_cents' });
-        updates.push('budget_cents = ?'); params.push(budget);
+        fields.budget_cents = budget;
       }
       if (status != null) {
         if (!['active', 'archived'].includes(status)) return res.status(400).json({ error: 'invalid status' });
-        updates.push('status = ?'); params.push(status);
+        fields.status = status;
       }
       if (show_countdown_to_employees != null) {
-        updates.push('show_countdown_to_employees = ?'); params.push(show_countdown_to_employees ? 1 : 0);
+        fields.show_countdown_to_employees = show_countdown_to_employees ? 1 : 0;
       }
-      if (!updates.length) return res.status(400).json({ error: 'nothing to update' });
-      await db.run(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`, [...params, task.id]);
+      if (!Object.keys(fields).length) return res.status(400).json({ error: 'nothing to update' });
+      await data.updateTask(task.id, fields);
       broadcast();
       res.json({ ok: true });
     } catch (err) {
@@ -85,12 +85,12 @@ module.exports = function taskRoutes({ db, store, auth, clock, broadcast }) {
     }
   });
 
-  // full-replace assignment set
+  // full-replace assignment set; closes open sessions of removed workers
   router.put('/:id/assignments', auth.requireAdmin, async (req, res, next) => {
     try {
       const taskId = intParam(req.params.id);
       if (taskId == null) return res.status(400).json({ error: 'invalid task id' });
-      const task = await store.q.task(taskId);
+      const task = await data.getTask(taskId);
       if (!task) return res.status(404).json({ error: 'no such task' });
       const ids = req.body?.employee_ids;
       if (!Array.isArray(ids) || ids.some((i) => !Number.isInteger(i))) {
@@ -98,32 +98,12 @@ module.exports = function taskRoutes({ db, store, auth, clock, broadcast }) {
       }
       const unknown = [];
       for (const id of ids) {
-        if (!(await store.q.employee(id))) unknown.push(id);
+        if (!(await data.getEmployee(id))) unknown.push(id);
       }
       if (unknown.length) {
         return res.status(400).json({ error: `unknown employee ids: ${unknown.join(', ')}` });
       }
-      await db.transaction(async (tx) => {
-        // a worker removed from the task must not keep an open session silently
-        // draining the budget (and blocking them from clocking in elsewhere)
-        const keep = new Set(ids);
-        const openSessions = await tx.all(
-          'SELECT id, employee_id, clock_in_ms FROM sessions WHERE task_id = ? AND clock_out_ms IS NULL',
-          [task.id]
-        );
-        for (const s of openSessions) {
-          if (!keep.has(s.employee_id)) {
-            await tx.run('UPDATE sessions SET clock_out_ms = ? WHERE id = ?', [
-              Math.max(clock.now(), s.clock_in_ms),
-              s.id,
-            ]);
-          }
-        }
-        await tx.run('DELETE FROM assignments WHERE task_id = ?', [task.id]);
-        for (const id of ids) {
-          await tx.run('INSERT INTO assignments (task_id, employee_id) VALUES (?, ?)', [task.id, id]);
-        }
-      });
+      await data.replaceAssignments(task.id, ids, clock.now());
       broadcast();
       res.json({ ok: true });
     } catch (err) {

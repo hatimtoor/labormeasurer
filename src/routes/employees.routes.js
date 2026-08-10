@@ -13,12 +13,12 @@ function parseRateCents(value) {
   return Math.round(n);
 }
 
-module.exports = function employeeRoutes({ db, store, auth, broadcast }) {
+module.exports = function employeeRoutes({ data, auth, broadcast }) {
   const router = express.Router();
 
   router.get('/', auth.requireAdmin, async (_req, res, next) => {
     try {
-      const rows = await store.q.employees();
+      const rows = await data.getEmployees();
       res.json(rows.map((e) => ({ ...e, is_admin: !!e.is_admin })));
     } catch (err) {
       next(err);
@@ -35,12 +35,15 @@ module.exports = function employeeRoutes({ db, store, auth, broadcast }) {
       if (String(password).length < MIN_PASSWORD_LENGTH) {
         return res.status(400).json({ error: `password must be at least ${MIN_PASSWORD_LENGTH} characters` });
       }
-      const row = await db.get(
-        'INSERT INTO employees (name, username, password_hash, hourly_rate_cents, is_admin) VALUES (?, ?, ?, ?, ?) RETURNING id',
-        [String(name), String(username).toLowerCase(), hashPassword(String(password)), rate, is_admin ? 1 : 0]
-      );
+      const id = await data.insertEmployee({
+        name: String(name),
+        username: String(username).toLowerCase(),
+        password_hash: hashPassword(String(password)),
+        hourly_rate_cents: rate,
+        is_admin: is_admin ? 1 : 0,
+      });
       broadcast();
-      res.status(201).json({ id: row.id });
+      res.status(201).json({ id });
     } catch (err) {
       if (isUniqueViolation(err)) return res.status(409).json({ error: 'username taken' });
       next(err);
@@ -49,26 +52,25 @@ module.exports = function employeeRoutes({ db, store, auth, broadcast }) {
 
   router.patch('/:id', auth.requireAdmin, async (req, res, next) => {
     try {
-      const emp = await store.q.employee(Number(req.params.id));
+      const emp = await data.getEmployee(Number(req.params.id));
       if (!emp) return res.status(404).json({ error: 'no such employee' });
       const { name, hourly_rate_cents, password } = req.body || {};
-      const updates = [];
-      const params = [];
-      if (name != null) { updates.push('name = ?'); params.push(String(name)); }
+      const fields = {};
+      if (name != null) fields.name = String(name);
       if (hourly_rate_cents != null) {
         const rate = parseRateCents(hourly_rate_cents);
         if (rate == null) return res.status(400).json({ error: 'invalid hourly_rate_cents' });
         // NOTE: open sessions keep their rate snapshot; new rate applies to future clock-ins
-        updates.push('hourly_rate_cents = ?'); params.push(rate);
+        fields.hourly_rate_cents = rate;
       }
       if (password != null) {
         if (String(password).length < MIN_PASSWORD_LENGTH) {
           return res.status(400).json({ error: `password must be at least ${MIN_PASSWORD_LENGTH} characters` });
         }
-        updates.push('password_hash = ?'); params.push(hashPassword(String(password)));
+        fields.password_hash = hashPassword(String(password));
       }
-      if (!updates.length) return res.status(400).json({ error: 'nothing to update' });
-      await db.run(`UPDATE employees SET ${updates.join(', ')} WHERE id = ?`, [...params, emp.id]);
+      if (!Object.keys(fields).length) return res.status(400).json({ error: 'nothing to update' });
+      await data.updateEmployee(emp.id, fields);
       broadcast();
       res.json({ ok: true });
     } catch (err) {

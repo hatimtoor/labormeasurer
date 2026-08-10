@@ -22,7 +22,7 @@ function createLoginLimiter() {
   };
 }
 
-module.exports = function authRoutes({ db, auth }) {
+module.exports = function authRoutes({ data, auth }) {
   const router = express.Router();
   const allowAttempt = createLoginLimiter();
 
@@ -33,9 +33,7 @@ module.exports = function authRoutes({ db, auth }) {
       if (!allowAttempt(key, Date.now())) {
         return res.status(429).json({ error: 'too many login attempts — try again in 15 minutes' });
       }
-      const user = username
-        ? await db.get('SELECT * FROM employees WHERE username = ?', [String(username).toLowerCase()])
-        : null;
+      const user = username ? await data.getEmployeeByUsername(String(username).toLowerCase()) : null;
       if (!user) {
         burnScrypt(password);
         return res.status(401).json({ error: 'invalid username or password' });

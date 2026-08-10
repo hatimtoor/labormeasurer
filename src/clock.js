@@ -6,9 +6,8 @@
 // other infrastructure timing use real time and are exempt.
 
 // offset is persisted in the settings table so a restart never moves time backwards.
-async function createSystemClock(db) {
-  const row = await db.get("SELECT value FROM settings WHERE key = 'timewarp_offset_ms'");
-  let offsetMs = Number(row?.value ?? 0);
+async function createSystemClock(data) {
+  let offsetMs = Number((await data.getSetting('timewarp_offset_ms')) ?? 0);
 
   return {
     now() {
@@ -21,11 +20,7 @@ async function createSystemClock(db) {
     async advance(ms) {
       if (!Number.isInteger(ms) || ms < 0) throw new Error('advance_ms must be a non-negative integer');
       offsetMs += ms;
-      await db.run(
-        `INSERT INTO settings (key, value) VALUES ('timewarp_offset_ms', ?)
-         ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
-        [String(offsetMs)]
-      );
+      await data.setSetting('timewarp_offset_ms', String(offsetMs));
       return offsetMs;
     },
   };

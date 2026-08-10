@@ -9,11 +9,11 @@ const request = require('supertest');
 const { createTestApp, createEmployee, login, HOUR_MS } = require('./helpers');
 
 test('11-step success scenario', async () => {
-  const { db, clock, app } = await createTestApp();
+  const { data, clock, app } = await createTestApp();
 
-  await createEmployee(db, { name: 'Admin', username: 'admin', rateCents: 0, isAdmin: true });
-  const aId = await createEmployee(db, { name: 'Worker A', username: 'a', rateCents: 2000 });
-  const bId = await createEmployee(db, { name: 'Worker B', username: 'b', rateCents: 2500 });
+  await createEmployee(data, { name: 'Admin', username: 'admin', rateCents: 0, isAdmin: true });
+  const aId = await createEmployee(data, { name: 'Worker A', username: 'a', rateCents: 2000 });
+  const bId = await createEmployee(data, { name: 'Worker B', username: 'b', rateCents: 2500 });
 
   const admin = await login(request, app, 'admin');
   const workerA = await login(request, app, 'a');
@@ -109,9 +109,9 @@ test('11-step success scenario', async () => {
 });
 
 test('guards: double clock-in idempotent, second task blocked, employee redaction', async () => {
-  const { db, app } = await createTestApp();
-  await createEmployee(db, { name: 'Admin', username: 'admin', isAdmin: true });
-  const aId = await createEmployee(db, { name: 'A', username: 'a', rateCents: 2000 });
+  const { data, app } = await createTestApp();
+  await createEmployee(data, { name: 'Admin', username: 'admin', isAdmin: true });
+  const aId = await createEmployee(data, { name: 'A', username: 'a', rateCents: 2000 });
   const admin = await login(request, app, 'admin');
   const workerA = await login(request, app, 'a');
 
@@ -143,9 +143,9 @@ test('guards: double clock-in idempotent, second task blocked, employee redactio
 });
 
 test('rate edit does not affect open session; applies to next clock-in', async () => {
-  const { db, clock, app } = await createTestApp();
-  await createEmployee(db, { name: 'Admin', username: 'admin', isAdmin: true });
-  const aId = await createEmployee(db, { name: 'A', username: 'a', rateCents: 2000 });
+  const { data, clock, app } = await createTestApp();
+  await createEmployee(data, { name: 'Admin', username: 'admin', isAdmin: true });
+  const aId = await createEmployee(data, { name: 'A', username: 'a', rateCents: 2000 });
   const admin = await login(request, app, 'admin');
 
   const t = (await request(app).post('/api/tasks').set('Cookie', admin).send({ name: 'T', budget_cents: 100_000 })).body.id;

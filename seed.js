@@ -5,63 +5,38 @@
 //   workera / worker     Worker A, $20/hr
 //   workerb / worker     Worker B, $25/hr
 //   Task "Frame Unit 101" with a $1,000 labor budget, both workers assigned.
-// Works against whichever backend .env selects (Supabase Postgres or SQLite).
+// Works against whichever backend .env selects (Supabase REST, direct
+// Postgres, or local SQLite). Restart the server afterwards so its cached
+// time-warp offset and cookie secret reload.
 
 require('dotenv').config();
 
-const fs = require('fs');
 const { hashPassword } = require('./src/auth');
 const { openDatabase } = require('./src/backend');
 
 async function main() {
-  const usingPg = !!(process.env.SUPABASE_DB_URL || process.env.DATABASE_URL);
+  const { data, label } = await openDatabase();
 
-  if (!usingPg) {
-    // fresh SQLite file
-    const file = process.env.LM_DB || 'labormeasurer.db';
-    try {
-      for (const suffix of ['', '-wal', '-shm']) {
-        if (fs.existsSync(file + suffix)) fs.unlinkSync(file + suffix);
-      }
-    } catch (err) {
-      if (err.code === 'EBUSY' || err.code === 'EPERM') {
-        console.error(`Cannot reset ${file} — it is in use. Stop the server (npm start) first, then re-run npm run seed.`);
-        process.exit(1);
-      }
-      throw err;
-    }
+  await data.wipeAll();
+
+  const employees = [
+    { name: 'Site Manager', username: 'admin', password: 'admin', hourly_rate_cents: 0, is_admin: 1 },
+    { name: 'Worker A', username: 'workera', password: 'worker', hourly_rate_cents: 2000, is_admin: 0 },
+    { name: 'Worker B', username: 'workerb', password: 'worker', hourly_rate_cents: 2500, is_admin: 0 },
+  ];
+  const ids = {};
+  for (const { password, ...emp } of employees) {
+    ids[emp.username] = await data.insertEmployee({ ...emp, password_hash: hashPassword(password) });
   }
 
-  const { db, label } = await openDatabase();
+  const taskId = await data.insertTask({
+    name: 'Frame Unit 101',
+    budget_cents: 100_000,
+    show_countdown_to_employees: 1,
+  });
+  await data.replaceAssignments(taskId, [ids.workera, ids.workerb], Date.now());
 
-  if (usingPg) {
-    // wipe rows but keep the schema (order respects foreign keys)
-    for (const table of ['sessions', 'assignments', 'tasks', 'employees', 'settings']) {
-      await db.run(`DELETE FROM ${table}`);
-    }
-  }
-
-  const emp = (name, username, password, rate, isAdmin) =>
-    db.get(
-      'INSERT INTO employees (name, username, password_hash, hourly_rate_cents, is_admin) VALUES (?, ?, ?, ?, ?) RETURNING id',
-      [name, username, hashPassword(password), rate, isAdmin ? 1 : 0]
-    );
-
-  await emp('Site Manager', 'admin', 'admin', 0, true);
-  const a = (await emp('Worker A', 'workera', 'worker', 2000, false)).id;
-  const b = (await emp('Worker B', 'workerb', 'worker', 2500, false)).id;
-
-  const task = (
-    await db.get(
-      'INSERT INTO tasks (name, budget_cents, show_countdown_to_employees) VALUES (?, ?, 1) RETURNING id',
-      ['Frame Unit 101', 100_000]
-    )
-  ).id;
-
-  await db.run('INSERT INTO assignments (task_id, employee_id) VALUES (?, ?)', [task, a]);
-  await db.run('INSERT INTO assignments (task_id, employee_id) VALUES (?, ?)', [task, b]);
-
-  await db.close();
+  await data.close();
 
   console.log(`Seeded demo data into ${label}`);
   console.log('NOTE: demo credentials are for local demos only — change them before any network deployment.');

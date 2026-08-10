@@ -23,25 +23,36 @@ npm start        # http://localhost:3000
 npm test         # includes the full 11-step success scenario
 ```
 
-## Database backends: Supabase Postgres or local SQLite
+## Database backends: Supabase or local SQLite
 
 With no configuration the app runs on a local SQLite file — zero setup, perfect
-for demos. To run on **Supabase**, create `.env` in the project root with the
-direct Postgres connection string:
+for demos. Two ways to run on **Supabase** (set in `.env`, git-ignored):
+
+**Option 1 — REST API with the service-role key** (no DB password needed):
+
+```
+SUPABASE_PROJECT_URL=https://<project-ref>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<service_role key from Project Settings -> API>
+```
+
+Create the tables first by running the schema SQL (see `src/db-pg.js` DDL or
+the SQL in the project history) in the Supabase SQL Editor. The service-role
+key stays server-side only. Caveat: crew-reassignment runs as a sequence of
+REST calls rather than one transaction.
+
+**Option 2 — direct Postgres connection** (full transactions, schema
+auto-created):
 
 ```
 SUPABASE_DB_URL=postgresql://postgres.<project-ref>:<db-password>@aws-0-<region>.pooler.supabase.com:6543/postgres
 ```
 
-Find it in the Supabase dashboard: **Connect** (top of the project page) →
-**Transaction pooler** URI. Note this is the *database* connection string with
-your DB password — the `https://` project URL and `anon`/`service_role` API
-keys are a different mechanism and are not used by this server.
+From the dashboard **Connect** button → Transaction pooler URI. If both are
+set, the direct connection wins.
 
-The server picks the backend automatically at boot (it logs which one), the
-schema is created on first run, and `npm run seed` seeds whichever backend is
-configured. Tests always run on in-memory SQLite and never touch Supabase.
-`.env` is git-ignored — never commit credentials.
+The server logs the active backend at boot, and `npm run seed` seeds whichever
+backend is configured. Tests always run on in-memory SQLite and never touch
+Supabase. Never commit credentials.
 
 Demo logins (from `npm run seed`):
 

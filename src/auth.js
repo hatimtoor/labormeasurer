@@ -30,16 +30,12 @@ function burnScrypt(password) {
   crypto.scryptSync(String(password ?? ''), 'timing-equalizer-salt', 32);
 }
 
-async function getSecret(db) {
-  const row = await db.get("SELECT value FROM settings WHERE key = 'cookie_secret'");
-  if (row) return row.value;
+async function getSecret(data) {
+  const existing = await data.getSetting('cookie_secret');
+  if (existing) return existing;
   const secret = crypto.randomBytes(32).toString('hex');
-  // ON CONFLICT: two instances booting at once must converge on one secret
-  await db.run(
-    "INSERT INTO settings (key, value) VALUES ('cookie_secret', ?) ON CONFLICT (key) DO NOTHING",
-    [secret]
-  );
-  return (await db.get("SELECT value FROM settings WHERE key = 'cookie_secret'")).value;
+  await data.setSetting('cookie_secret', secret);
+  return (await data.getSetting('cookie_secret')) || secret;
 }
 
 function sign(payload, secret) {
@@ -76,8 +72,8 @@ function readCookies(req) {
 }
 
 // middleware factory: attaches req.user (employee row) when the cookie is valid
-async function createAuth(db) {
-  const secret = await getSecret(db);
+async function createAuth(data) {
+  const secret = await getSecret(data);
 
   function attachUser(req, _res, next) {
     const id = parseCookie(readCookies(req)[COOKIE_NAME], secret);
@@ -85,8 +81,9 @@ async function createAuth(db) {
       req.user = null;
       return next();
     }
-    // explicit columns — password_hash must never ride along on req.user
-    db.get('SELECT id, name, username, hourly_rate_cents, is_admin FROM employees WHERE id = ?', [id])
+    // data.getEmployee never includes password_hash
+    data
+      .getEmployee(id)
       .then((user) => {
         req.user = user || null;
         next();

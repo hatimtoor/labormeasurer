@@ -7,15 +7,16 @@ const { createApp } = require('./app');
 const { openDatabase } = require('./backend');
 
 async function main() {
-  const { db, label } = await openDatabase();
-  const clock = await createSystemClock(db);
-  const app = await createApp({ db, clock });
+  const { data, label } = await openDatabase();
+  const clock = await createSystemClock(data);
+  const app = await createApp({ data, clock });
 
   const port = Number(process.env.PORT || 3000);
   const server = app.listen(port, async () => {
     console.log(`LaborMeasurer running at http://localhost:${port} [${label}]`);
-    const row = await db.get('SELECT COUNT(*) AS n FROM employees');
-    if (Number(row.n) === 0) console.log('No users yet — run `npm run seed` for demo data (admin/admin).');
+    if ((await data.countEmployees()) === 0) {
+      console.log('No users yet — run `npm run seed` for demo data (admin/admin).');
+    }
   });
 
   let shuttingDown = false;
@@ -23,12 +24,12 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     server.close(async () => {
-      await db.close();
+      await data.close();
       process.exit(0);
     });
     // open SSE streams keep the server alive — force-exit shortly after
     setTimeout(async () => {
-      try { await db.close(); } catch { /* already closed */ }
+      try { await data.close(); } catch { /* already closed */ }
       process.exit(0);
     }, 2000).unref();
   }

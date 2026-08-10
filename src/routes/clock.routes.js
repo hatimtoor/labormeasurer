@@ -3,7 +3,7 @@
 const express = require('express');
 const { isUniqueViolation } = require('../db');
 
-module.exports = function clockRoutes({ store, auth, clock, broadcast }) {
+module.exports = function clockRoutes({ data, auth, clock, broadcast }) {
   const router = express.Router();
 
   async function resolveTarget(req, res) {
@@ -19,7 +19,7 @@ module.exports = function clockRoutes({ store, auth, clock, broadcast }) {
         return null;
       }
     }
-    const employee = await store.q.employee(employeeId);
+    const employee = await data.getEmployee(employeeId);
     if (!employee) {
       res.status(404).json({ error: 'no such employee' });
       return null;
@@ -29,16 +29,16 @@ module.exports = function clockRoutes({ store, auth, clock, broadcast }) {
 
   router.post('/:id/clock-in', auth.requireAuth, async (req, res, next) => {
     try {
-      const task = await store.q.task(Number(req.params.id));
+      const task = await data.getTask(Number(req.params.id));
       if (!task) return res.status(404).json({ error: 'no such task' });
       if (task.status !== 'active') return res.status(409).json({ error: 'task is archived' });
       const employee = await resolveTarget(req, res);
       if (!employee) return;
-      if (!req.user.is_admin && !(await store.q.isAssigned(task.id, employee.id))) {
+      if (!req.user.is_admin && !(await data.isAssigned(task.id, employee.id))) {
         return res.status(403).json({ error: 'not assigned to this task' });
       }
 
-      const open = await store.q.openSessionForEmployee(employee.id);
+      const open = await data.getOpenSession(employee.id);
       if (open) {
         if (open.task_id === task.id) {
           // idempotent double clock-in
@@ -47,9 +47,14 @@ module.exports = function clockRoutes({ store, auth, clock, broadcast }) {
         return res.status(409).json({ error: 'already clocked into another task', open_task_id: open.task_id });
       }
 
-      let row;
+      let sessionId;
       try {
-        row = await store.q.insertSession(task.id, employee.id, employee.hourly_rate_cents, clock.now());
+        sessionId = await data.insertSession({
+          task_id: task.id,
+          employee_id: employee.id,
+          rate_cents_snapshot: employee.hourly_rate_cents,
+          clock_in_ms: clock.now(),
+        });
       } catch (err) {
         // ux_open_session partial unique index — lost a race with a concurrent clock-in
         if (isUniqueViolation(err)) {
@@ -58,7 +63,7 @@ module.exports = function clockRoutes({ store, auth, clock, broadcast }) {
         throw err;
       }
       broadcast();
-      res.status(201).json({ ok: true, session_id: row.id });
+      res.status(201).json({ ok: true, session_id: sessionId });
     } catch (err) {
       next(err);
     }
@@ -66,18 +71,18 @@ module.exports = function clockRoutes({ store, auth, clock, broadcast }) {
 
   router.post('/:id/clock-out', auth.requireAuth, async (req, res, next) => {
     try {
-      const task = await store.q.task(Number(req.params.id));
+      const task = await data.getTask(Number(req.params.id));
       if (!task) return res.status(404).json({ error: 'no such task' });
       const employee = await resolveTarget(req, res);
       if (!employee) return;
 
-      const open = await store.q.openSessionForEmployee(employee.id);
+      const open = await data.getOpenSession(employee.id);
       if (!open || open.task_id !== task.id) {
         // idempotent no-op
         return res.json({ ok: true, already: true });
       }
       // clamp so an NTP step backwards can never violate clock_out >= clock_in
-      await store.q.closeSession(Math.max(clock.now(), open.clock_in_ms), open.id);
+      await data.closeSession(open.id, Math.max(clock.now(), open.clock_in_ms));
       broadcast();
       res.json({ ok: true, session_id: open.id });
     } catch (err) {

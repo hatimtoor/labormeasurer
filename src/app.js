@@ -6,12 +6,12 @@ const { createAuth } = require('./auth');
 const { createStore } = require('./store');
 const { createSseHub } = require('./sse');
 
-// Async factory — the same seam serves production (SystemClock + SQLite or
-// Supabase Postgres adapter) and tests (FakeClock + ':memory:' SQLite).
-async function createApp({ db, clock }) {
+// Async factory — the same seam serves production (SystemClock + Supabase or
+// SQLite data layer) and tests (FakeClock + ':memory:' SQLite data layer).
+async function createApp({ data, clock }) {
   const app = express();
-  const auth = await createAuth(db);
-  const store = createStore(db, clock);
+  const auth = await createAuth(data);
+  const store = createStore(data, clock);
   const sse = createSseHub(store);
   const broadcast = sse.broadcast;
 
@@ -28,7 +28,7 @@ async function createApp({ db, clock }) {
   app.use(auth.attachUser);
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
-  const deps = { db, store, auth, clock, broadcast };
+  const deps = { data, store, auth, clock, broadcast };
   app.use('/api', require('./routes/auth.routes')(deps));
   app.use('/api/employees', require('./routes/employees.routes')(deps));
   app.use('/api/tasks', require('./routes/tasks.routes')(deps));
