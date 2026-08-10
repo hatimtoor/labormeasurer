@@ -44,14 +44,19 @@
           <h2>Tasks</h2>
           <form id="new-task-form" class="inline-create">
             <input id="task-name" placeholder="New task name" aria-label="Task name" required />
-            <select id="task-mode" aria-label="Budget type">
-              <option value="money">$ budget</option>
-              <option value="hours">Hours budget</option>
-            </select>
             <input id="task-budget" type="number" min="0" step="0.01" placeholder="Budget ($)" aria-label="Budget" required />
-            <select id="task-project" aria-label="Project"><option value="">No project</option></select>
             <label class="check"><input type="checkbox" id="task-show-countdown" checked /> Crew sees countdown</label>
             <button class="btn primary" type="submit">+ Create task</button>
+            <details class="more-opts">
+              <summary>More options</summary>
+              <div class="more-opts-row">
+                <select id="task-mode" aria-label="Budget type">
+                  <option value="money">$ budget</option>
+                  <option value="hours">Hours budget</option>
+                </select>
+                <select id="task-project" aria-label="Project"><option value="">No project</option></select>
+              </div>
+            </details>
           </form>
         </div>
         <div id="project-strip" class="project-strip"></div>

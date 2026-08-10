@@ -459,3 +459,13 @@ body.wall .task-cards { grid-template-columns: repeat(auto-fit, minmax(min(480px
 body.wall .countdown { font-size: clamp(3rem, 8vw, 7rem); }
 body.wall .card-head h3 { font-size: clamp(1.2rem, 2.5vw, 2rem); }
 body.wall .stats { font-size: 1rem; }
+
+/* ---------------- create-task "More options" disclosure ---------------- */
+.more-opts { font-size: 0.82rem; }
+.more-opts summary {
+  cursor: pointer; color: var(--ink-3); font-weight: 600;
+  list-style-position: inside;
+}
+.more-opts summary:hover { color: var(--ember-strong); }
+.more-opts[open] { flex-basis: 100%; }
+.more-opts-row { display: flex; gap: 0.5rem; margin-top: 0.45rem; flex-wrap: wrap; }
